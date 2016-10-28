@@ -5,6 +5,7 @@
 #include <map>
 #include "loaders/loader.hpp"
 #include "hho/hho.hpp"
+#include "visualization/post_processing_all.hpp"
 
 #include <unsupported/Eigen/SparseExtra>
 
@@ -32,7 +33,6 @@ void test_diffusion (MeshType & msh,       /* handle to the mesh */
 
     typedef dynamic_vector<scalar_type>                 vector_type;
     typedef dynamic_matrix<scalar_type>                 matrix_type;
-
 
     disk::gradient_reconstruction_nopre<mesh_type,
                                         cell_basis_type,
@@ -81,7 +81,7 @@ void test_diffusion (MeshType & msh,       /* handle to the mesh */
 
     double factor, plst_switch;
 
-    if(coef_init = 0)
+    if(coef_init == 0)
     {
         factor = plst_data.mu;
         plst_switch = 0.;
@@ -112,6 +112,8 @@ void test_diffusion (MeshType & msh,       /* handle to the mesh */
         //WK: if diffusion changes with domain, it would be mandatory to include mu here, to do it locally
 
         auto scnp = statcond_nopre.compute_Bingham(msh, cl, loc, cell_rhs, plst_switch*plasticity.rhs);
+        //auto scnp = statcond_nopre.compute(msh, cl, loc, cell_rhs);
+
         assembler_nopre.assemble(msh, cl, scnp);
     }
 
@@ -171,7 +173,6 @@ void test_diffusion (MeshType & msh,       /* handle to the mesh */
         rec.tail(cb.size()-1) = gradrec_nopre.oper * x;
         rec(0) = x(0);
 
-        //rec = (plst_data.Lref*plst_data.Lref /plst_data.mu) * rec;
         auto test_points = make_test_points(msh, cl);
         for (size_t itp = 0; itp < test_points.size(); itp++)
                 //for (auto& qp : qps)
@@ -221,13 +222,13 @@ void test_diffusion (MeshType & msh,       /* handle to the mesh */
     }
 
     ofs.close();
-
+    #if 0
     std::cout << "Mesh diameter: " << diam << std::endl;
     std::cout << "L2-norm error, dof, K:   " << std::sqrt(err_dof_k) << std::endl;
     std::cout << "L2-norm error, fun, K:   " << std::sqrt(err_fun_k) << std::endl;
     std::cout << "L2-norm error, dof, K+1: " << std::sqrt(err_dof_kp) << std::endl;
     std::cout << "L2-norm error, fun, K+1: " << std::sqrt(err_fun_kp) << std::endl;
-
+    #endif
 };
 
 
@@ -235,9 +236,9 @@ void test_diffusion (MeshType & msh,       /* handle to the mesh */
 template<typename T>
 struct plastic_data
 {
-    plastic_data(): Lref(1.0), Vref(1.0), Bn(0.1), mu(1.0), alpha(1.), f(1.),method(true)
+    plastic_data(): Lref(1.), Vref(1.), Bn(0.1), mu(1.), alpha(1.), f(1.),method(true)
     {}
-    T f;
+    T f;                    //WK: Cuidado porque f deberia ser el valor externo de la fuente.
     T Lref;                 /* Charactetistic length */
     T Vref;                 /* Reference velocity */
     T Bn;                   /* Bingham number */
@@ -277,9 +278,11 @@ initialization(const MeshType& msh,
 
         sigma_Th[i] =  tensor_quad_matrix_type::Zero(MeshType::dimension, cell_quadpoints.size());
         Uh_Th[i]    =  dynamic_vector<typename mesh_type::scalar_type>::Zero(dsr.total_size());
-        i++;
+        ++i;
     }
 };
+
+
 
 
 int main (int argc, char** argv )
@@ -291,7 +294,7 @@ int main (int argc, char** argv )
     int     degree      = 1;
     int     elems_1d    = 10;
     int     ch, method_name;
-    size_t  max_iters = 1;
+    size_t  max_iters   = 1;
     plastic_data<RealType> plst_data;
 
 
@@ -343,26 +346,27 @@ int main (int argc, char** argv )
                 break;
             case 'v':
                 plst_data.mu = atof(optarg);
-                if (plst_data.mu < 0)
+                if (plst_data.mu <= 0)
                 {
-                    std::cout << "Viscosity must be positive. Falling back to 1." << std::endl;
+                    std::cout << "Viscosity must be bigger than 0. Falling back to 1." << std::endl;
                     plst_data.mu = 1.0;
                 }
                 break;
             case 'a':
                 plst_data.alpha = atof(optarg);
-                if (plst_data.alpha < 0)
+                if (plst_data.alpha <= 0)
                 {
-                    std::cout << "Augmentation parameter must be positive. Falling back to 0.1" << std::endl;
-                    plst_data.alpha = 0.1;
+                    std::cout << "Augmentation parameter must be bigger than 0. Falling back to 1." << std::endl;
+                    plst_data.alpha = 1.;
                 }
                 break;
             case 'B':
                 plst_data.Bn = atof(optarg);
                 if (plst_data.Bn < 0)
                 {
-                    std::cout << "Bingham number must be positive. Falling back to 0." << std::endl;
+                    std::cout << "Bingham number must be positive. Falling back to 0. Solving diffusion case." << std::endl;
                     plst_data.Bn = 0.0;
+                    max_iters    = 1;
                 }
                 break;
             case 'm':
@@ -401,6 +405,7 @@ int main (int argc, char** argv )
 
         typedef disk::generic_mesh<RealType, 1>                 mesh_type;
         typedef disk::uniform_mesh_loader<RealType,1>           loader_type;
+        typedef typename mesh_type::scalar_type                 scalar_type;
         typedef Eigen::Matrix< RealType, 1, Eigen::Dynamic>     tensor_quad_matrix_type;
         typedef Eigen::Matrix< RealType, 1, 1 >                 tensor_type; //Esto cambia para 2D y 3D
         typedef typename mesh_type::cell                        cell_type;
@@ -421,9 +426,13 @@ int main (int argc, char** argv )
         std::vector<dynamic_vector<RealType>>       Uh_Th( msh.cells_size());
         std::vector<tensor_quad_matrix_type>        sigma_Th( msh.cells_size());
         initialization<mesh_type,tensor_quad_matrix_type,cell_quad_type> (msh, sigma_Th, Uh_Th, degree);
+        disk::post_processing<scalar_type, 1, mesh_type> pp(msh,degree);
 
-        for(size_t iter = 1; iter < max_iters ; iter++)
-            test_diffusion(msh, f, sf, degree, plst_data, Uh_Th, sigma_Th, iter);
+        for(size_t iter = 0; iter < max_iters ; iter++)
+            {
+                test_diffusion(msh, f, sf, degree, plst_data, Uh_Th, sigma_Th, iter);
+                pp.vtk_writer(msh,"prueba",degree,Uh_Th,iter);
+            }
         return 0;
 
     }
@@ -471,14 +480,15 @@ int main (int argc, char** argv )
         std::vector<dynamic_vector<RealType>>    Uh_Th( msh.cells_size());
         std::vector<tensor_quad_matrix_type>     sigma_Th( msh.cells_size());
         initialization<mesh_type,tensor_quad_matrix_type,cell_quad_type> (msh, sigma_Th, Uh_Th, degree);
+        disk::post_processing<scalar_type, 2, mesh_type> pp(msh,degree);
+
 
         for(size_t iter = 0; iter < max_iters ; iter++)
-            test_diffusion(msh, f, sf, degree,
-                plst_data,
-                 Uh_Th,
-                  sigma_Th,
-                   iter);
-
+        {
+            std::cout << "iter = "<<iter << std::endl;
+            test_diffusion(msh, f, sf, degree, plst_data, Uh_Th, sigma_Th, iter);
+            pp.vtk_writer(msh,"prueba",degree,Uh_Th,iter);
+        }
         return 0;
     }
     return 0;
