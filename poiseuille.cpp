@@ -1,26 +1,70 @@
 #include <iostream>
 #include <regex>
 #include <unistd.h>
-
+#include <sstream>
 #include <map>
 #include "loaders/loader.hpp"
 #include "hho/hho.hpp"
+#include "hho/hho_pst.hpp"
 #include "visualization/post_processing_all.hpp"
 
 #include <unsupported/Eigen/SparseExtra>
 
-template<typename MeshType, typename Function, typename Solution, typename PlasticData,
-                                            typename StorageTensorQuadMatrixType>
-void test_diffusion (MeshType & msh,       /* handle to the mesh */
-           const Function& load,            /* rhs */
-           const Solution& solution,        /* solution of the problem */
-           const size_t degree,             /* degree of the method */
-           const PlasticData&  plst_data,   /* Material and ALG parameters */
-           std::vector<dynamic_vector<typename MeshType::scalar_type>> & Uh_Th,    /* storage of velocities*/
-           StorageTensorQuadMatrixType   & sigma_Th,
-           size_t coef_init)   /* storage of tensor sigma  in each cell and in each quad point*/
+
+template<typename T, size_t DIM, typename Storage>
+std::vector<dynamic_vector<T>>
+startup(const disk::mesh<T,DIM,Storage>& msh, const T Bi, std::string& dir_name,const size_t degree)
 {
-    typedef MeshType    mesh_type;
+
+    typedef disk::mesh<T,DIM,Storage>              mesh_type;
+    typedef disk::scaled_monomial_scalar_basis<mesh_type, typename mesh_type::cell>    cell_basis_type;
+    typedef disk::scaled_monomial_scalar_basis<mesh_type, typename mesh_type::face>    face_basis_type;
+
+    T stop_error(0.);
+
+    std::ostringstream      var_Bn, var_DIM;
+    var_Bn  << 10.*Bi;
+    var_DIM << mesh_type::dimension;
+    std::string Bitostr     =   var_Bn.str();
+    std::string DIMtostr    =   var_DIM.str();
+    dir_name    =   DIMtostr + "D_Bi" + Bitostr;
+    std::cout << "dir_name"<< dir_name << std::endl;
+    size_t  i =  0;
+
+    std::vector<dynamic_vector<T>> U(msh.cells_size());
+
+    for (auto& cl : msh)
+    {
+        auto fcs = faces(msh, cl);
+        auto num_faces       = fcs.size();
+        auto num_cell_dofs   = cell_basis_type(degree).size();
+        auto num_face_dofs   = face_basis_type(degree).size();
+        disk::dofspace_ranges dsr(num_cell_dofs, num_face_dofs, num_faces);
+        U[i] =  dynamic_vector<T>::Zero(dsr.total_size());
+        ++i;
+    }
+    return U;
+};
+
+template<typename MeshType, typename Function, typename Solution, typename Gradient,
+                                            typename TensorsType>
+bool test_diffusion (MeshType& msh,       /* handle to the mesh */
+           const Function&     load,            /* rhs */
+           const Solution&     solution,        /* solution of the problem */
+           const Gradient&     gradient,
+           const size_t        degree,             /* degree of the method */
+           const disk::plasticity_data<typename MeshType::scalar_type>&  pst,   /* Material and ALG parameters */
+           std::vector<dynamic_vector<typename MeshType::scalar_type>> & Uh_Th,    /* storage of velocities*/
+           std::vector<TensorsType>& tsr_vec,
+           typename MeshType::scalar_type& stop_error,
+           int iter,
+           std::ofstream& its,
+           std::ofstream& efs,
+           const std::string & directory)   /* storage of tensor sigma  in each cell and in each quad point*/
+{
+
+    //typedef disk::mesh<T,DIM,Storage>    mesh_type;
+    typedef MeshType mesh_type;
     typedef typename mesh_type::scalar_type            scalar_type;
     typedef typename mesh_type::cell                   cell_type;
     typedef typename mesh_type::face                   face_type;
@@ -40,101 +84,70 @@ void test_diffusion (MeshType & msh,       /* handle to the mesh */
                                         face_basis_type,
                                         face_quadrature_type> gradrec_nopre(degree);
 
-
     disk::diffusion_like_stabilization_nopre<mesh_type,
                                              cell_basis_type,
                                              cell_quadrature_type,
                                              face_basis_type,
                                              face_quadrature_type> stab_nopre(degree);
 
-    disk::diffusion_like_static_condensation_nopre<mesh_type,
+    disk::diffusion_like_static_condensation_pst<mesh_type,
                                                    cell_basis_type,
                                                    cell_quadrature_type,
                                                    face_basis_type,
-                                                   face_quadrature_type> statcond_nopre(degree);
-
-    disk::assembler_nopre<mesh_type,
+                                                   face_quadrature_type> statcond_pst(degree);
+    disk::assembler_pst<mesh_type,
                           face_basis_type,
-                          face_quadrature_type> assembler_nopre(msh, degree);
+                          face_quadrature_type> assembler_pst(msh, degree);
 
     disk::plasticity<scalar_type,
                         mesh_type,
                         cell_basis_type,
                         cell_quadrature_type,
-                        face_basis_type>  plasticity(degree,
-                                                     plst_data.Lref,
-                                                     plst_data.Vref,
-                                                     plst_data.Bn,
-                                                     plst_data.mu,
-                                                     plst_data.f,
-                                                     plst_data.alpha,
-                                                     plst_data.method);
+                        face_basis_type>  plasticity(degree,pst);
 
     cell_basis_type         cb(degree+1);
     cell_quadrature_type    cq(2*degree+2);
 
+    scalar_type factor, plst_switch(1.);
 
-    char numstr[4];
-    std::string ext = ".mtx";
-    std::string result;
-    std::string name;
+    if(pst.method == true)
+        factor = pst.alpha + pst.mu;
+    else
+        factor = pst.alpha;
 
-    double factor, plst_switch;
-
-    if(coef_init == 0)
+    if(iter == 0)
     {
-        factor = plst_data.mu;
+        factor = pst.mu;
         plst_switch = 0.;
     }
-    else
-    {
-        plst_switch = 1.;
-        if(plst_data.method == true)
-            factor = plst_data.alpha + plst_data.mu;
-        else
-        {
-            factor = plst_data.alpha;
-        }
-    }
-
 
     for (auto& cl : msh)
     {
         gradrec_nopre.compute(msh, cl);
         stab_nopre.compute(msh, cl, gradrec_nopre.oper);
-        matrix_type loc = factor*(gradrec_nopre.data + stab_nopre.data);
-        auto cell_rhs = disk::compute_rhs<cell_basis_type, cell_quadrature_type>(msh, cl, load, degree);
-
-        auto cell_id  = msh.lookup(cl);
-        auto local_sigma_storage =  sigma_Th[cell_id];
-
-        plasticity.compute(msh, cl, gradrec_nopre.oper, Uh_Th[cell_id], local_sigma_storage);
-        //WK: if diffusion changes with domain, it would be mandatory to include mu here, to do it locally
-
-        auto scnp = statcond_nopre.compute_Bingham(msh, cl, loc, cell_rhs, plst_switch*plasticity.rhs);
-        //auto scnp = statcond_nopre.compute(msh, cl, loc, cell_rhs);
-
-        assembler_nopre.assemble(msh, cl, scnp);
+        matrix_type   loc = factor * (gradrec_nopre.data + stab_nopre.data);
+        auto cell_rhs     =  disk::compute_rhs<cell_basis_type, cell_quadrature_type>(msh, cl, load, degree);
+        auto cell_id      =  msh.lookup(cl);
+        auto tsr          =  tsr_vec[cell_id];
+        plasticity.compute(msh, cl, gradrec_nopre.oper, Uh_Th[cell_id],tsr); //WK: if diffusion changes with domain, it would be mandatory to include mu here, to do it locally
+        auto scnp         =  statcond_pst.compute(msh, cl, loc, cell_rhs, plst_switch*plasticity.rhs);
+        assembler_pst.assemble(msh, cl, scnp);
     }
+    assembler_pst.impose_boundary_conditions(msh, solution, pst);
+    assembler_pst.finalize();
 
-    assembler_nopre.impose_boundary_conditions(msh, solution);
-    assembler_nopre.finalize();
-
-
-    //WK: definirlo bien despues, dejarlo como Matteo/
     Eigen::SparseLU<Eigen::SparseMatrix<scalar_type>>   solver;
-    solver.analyzePattern(assembler_nopre.matrix);
-    solver.factorize(assembler_nopre.matrix);
-    dynamic_vector<scalar_type> X = solver.solve(assembler_nopre.rhs);
+    solver.analyzePattern(assembler_pst.matrix);
+    solver.factorize(assembler_pst.matrix);
+    dynamic_vector<scalar_type> X = solver.solve(assembler_pst.rhs);
     face_basis_type face_basis(degree);
     size_t fbs = face_basis.size();
 
-    scalar_type diam = 0.0;
-    scalar_type err_dof_k = 0.0;
-    scalar_type err_fun_k = 0.0;
-    scalar_type err_dof_kp = 0.0;
-    scalar_type err_fun_kp = 0.0;
-    std::ofstream ofs("plotnew.dat");
+    scalar_type diam        = 0.0;
+    scalar_type gamma_error = 0.0;
+    scalar_type u_Ruh_error = 0.0;
+
+    std::ofstream ofs( directory + "/plotnew.dat");
     for (auto& cl : msh)
     {
         diam = std::max(diameter(msh, cl), diam);
@@ -163,9 +176,8 @@ void test_diffusion (MeshType & msh,       /* handle to the mesh */
         dynamic_matrix<scalar_type> loc = factor*(gradrec_nopre.data + stab_nopre.data);
         auto cell_rhs = disk::compute_rhs<cell_basis_type, cell_quadrature_type>(msh, cl, load, degree);
         auto cell_id  = msh.lookup(cl);
-        plasticity.compute(msh, cl, gradrec_nopre.oper, Uh_Th[cell_id], sigma_Th[cell_id]);
-        dynamic_vector<scalar_type>   x = statcond_nopre.recover_Bingham(msh, cl, loc, cell_rhs, xFs, plst_switch*plasticity.rhs);
-        //dynamic_vector<scalar_type>   x = statcond_nopre.recover(msh, cl, loc, cell_rhs, xFs);
+        plasticity.compute(msh, cl, gradrec_nopre.oper, Uh_Th[cell_id], tsr_vec[cell_id]);
+        dynamic_vector<scalar_type>   x = statcond_pst.recover(msh, cl, loc, cell_rhs, xFs, plst_switch*plasticity.rhs);
 
         Uh_Th[cell_id]  = x;
 
@@ -177,110 +189,76 @@ void test_diffusion (MeshType & msh,       /* handle to the mesh */
         for (size_t itp = 0; itp < test_points.size(); itp++)
                 //for (auto& qp : qps)
         {
-            auto tp = test_points[itp];
+            auto tp   = test_points[itp];
             //auto tp = qp.point();
-            auto pot = 0.;
+            auto pot  = 0.;
+            auto potR = 0.;
 
             auto phi = cb.eval_functions(msh, cl, tp);
 
             for (size_t i = 0; i < cb.size(); i++)
-                pot += phi[i] * rec(i);
+                pot  += phi[i] * rec(i);
 
-            for (size_t i = 0; i < MeshType::dimension; i++)
+            for (size_t i = 0; i < mesh_type::dimension; i++)
                 ofs << tp[i] << " ";
-            ofs << pot << " " << std::abs(pot - solution(tp)) << std::endl;
+            ofs << pot << " " << pot << std::endl;
         }
 
         auto qps = cq.integrate(msh, cl);
+        size_t col = 0;
 
         for (auto& qp : qps)
         {
-            auto phi = cb.eval_functions(msh, cl, qp.point());
+            auto cell_id    =   msh.lookup(cl);
+            auto gamma      =   tsr_vec[cell_id].gamma.col(col);
+            auto dphi       =   cb.eval_gradients(msh, cl, qp.point());
+            auto phi        =   cb.eval_functions(msh, cl, qp.point());
+            auto col_range  =   cb.range(1,degree+1);
+            auto row_range  =   disk::dof_range(0,mesh_type::dimension);
 
-            scalar_type potk = 0.0;
-            for (size_t i = 0; i < cb.range(0,degree).size(); i++)
-                potk += phi[i] * rec(i);
+            matrix_type dphi_matrix =   disk::make_gradient_matrix(dphi);
+            matrix_type dphi_taken  =   take(dphi_matrix, row_range, col_range);
+            matrix_type dphi_rec_uh =   dphi_taken * gradrec_nopre.oper*x;
 
-            scalar_type potkp = potk;
-            for (size_t i = cb.range(0,degree).size(); i < cb.size(); i++)
-                potkp += phi[i] * rec(i);
-
-            auto potr = solution(qp.point());
-
-            scalar_type diffk = 0.0;
-            scalar_type diffkp = 0.0;
-            diffk = (potk - potr) * (potk - potr) * qp.weight();
-            diffkp = (potkp - potr) * (potkp - potr) * qp.weight();
-
-            err_fun_k += diffk;
-            err_fun_kp += diffkp;
+            gamma_error  += ((gamma - dphi_rec_uh).cwiseProduct(gamma - dphi_rec_uh)).sum();
+            col++;
         }
-
-            //err_dof_k += compute_L2_error(dld, degree, solution, x);
-            //err_dof_kp += compute_L2_error(dld, degree+1, solution, x);
 
     }
 
     ofs.close();
-    #if 0
-    std::cout << "Mesh diameter: " << diam << std::endl;
-    std::cout << "L2-norm error, dof, K:   " << std::sqrt(err_dof_k) << std::endl;
-    std::cout << "L2-norm error, fun, K:   " << std::sqrt(err_fun_k) << std::endl;
-    std::cout << "L2-norm error, dof, K+1: " << std::sqrt(err_dof_kp) << std::endl;
-    std::cout << "L2-norm error, fun, K+1: " << std::sqrt(err_fun_kp) << std::endl;
-    #endif
-};
 
+    scalar_type TOL_solver = 1.e-12;
+    scalar_type TOL = 1.e-12;
+    u_Ruh_error = std::sqrt(u_Ruh_error);
+    gamma_error = std::sqrt(gamma_error);
+    scalar_type stop_criterio = std::abs(stop_error - gamma_error);
+    std::cout << "l2-norm error, gamma - Du:" << gamma_error << std::endl;
+    std::cout << "l2-norm error, iterations:" << stop_criterio << std::endl;
+    its<< iter << " "<<gamma_error << std::endl;
 
-
-template<typename T>
-struct plastic_data
-{
-    plastic_data(): Lref(1.), Vref(1.), Bn(0.1), mu(1.), alpha(1.), f(1.),method(true)
-    {}
-    T f;                    //WK: Cuidado porque f deberia ser el valor externo de la fuente.
-    T Lref;                 /* Charactetistic length */
-    T Vref;                 /* Reference velocity */
-    T Bn;                   /* Bingham number */
-    T mu;                   /* viscosity */
-    T alpha;
-    bool   method;
-
-};
-
-template<typename MeshType, typename TensorQuadType, typename CellQuadType>
-void
-initialization(const MeshType& msh,
-                std::vector<TensorQuadType> & sigma_Th,
-                std::vector<dynamic_vector<MeshType::scalar_type>> & Uh_Th,
-                size_t degree)
-{
-
-    typedef MeshType                                   mesh_type;
-    typedef TensorQuadType                             tensor_quad_matrix_type;
-    typedef disk::scaled_monomial_scalar_basis<mesh_type, typename mesh_type::cell>    cell_basis_type;
-    typedef disk::scaled_monomial_scalar_basis<mesh_type, typename mesh_type::face>    face_basis_type;
-
-    size_t  i =  0;
-
-    for (auto& cl : msh)
+    if(gamma_error < TOL)
     {
-        auto fcs = faces(msh, cl);
-        auto num_faces       = fcs.size();
-        auto num_cell_dofs   = cell_basis_type(degree).size();
-        auto num_face_dofs   = face_basis_type(degree).size();
-        disk::dofspace_ranges dsr(num_cell_dofs, num_face_dofs, num_faces);
-
-        auto cell_quad      = CellQuadType(2*degree+2);
-        // WK: degree of quadrature assumed as for (Dru,Dru)
-        // Dejarlo aqui por si camba el grado para cda celda
-        auto cell_quadpoints = cell_quad.integrate(msh, cl);
-
-        sigma_Th[i] =  tensor_quad_matrix_type::Zero(MeshType::dimension, cell_quadpoints.size());
-        Uh_Th[i]    =  dynamic_vector<typename mesh_type::scalar_type>::Zero(dsr.total_size());
-        ++i;
+        std::cout << "/* break by convergence of gamma */" << std::endl;
+        return 1;
     }
+    #if 0
+    if(stop_criterio < TOL_solver)
+    {
+        std::cout << "/* break by TOL_solver */"<<TOL_solver << std::endl;
+        return 1;
+    }
+    #endif
+    stop_error = gamma_error;
+
+    disk::plasticity_post_processing(msh,solution,gradient,tsr_vec,Uh_Th,pst, directory, degree, efs,iter);
+
+
+    return 0;
+
 };
+
+
 
 
 
@@ -293,12 +271,15 @@ int main (int argc, char** argv )
     char    *filename   = nullptr;
     int     degree      = 1;
     int     elems_1d    = 10;
-    int     ch, method_name;
+    int     ch, method_name,refine_on;
     size_t  max_iters   = 1;
-    plastic_data<RealType> plst_data;
+    bool    do_remesh = false;
+    std::string Error_convg  =  "/Error_convergence.dat";
+    std::string Error_sol    =  "/Error_solution.dat";
 
+    disk::plasticity_data<RealType> pst;
 
-    while ( (ch = getopt(argc, argv, "k:n:u:l:v:a:B:i:m:")) != -1 )
+    while ( (ch = getopt(argc, argv, "k:n:h:v:a:B:i:m:")) != -1 )
     {
         switch(ch)
         {
@@ -328,67 +309,61 @@ int main (int argc, char** argv )
                     elems_1d = 10;
                 }
                 break;
-            case 'u':
-                plst_data.Vref = atof(optarg);
-                if (plst_data.Vref < 0)
-                {
-                    std::cout << "Velocity norm must be positive. Falling back to 1." << std::endl;
-                    plst_data.Vref = 1.0;
-                }
-                break;
-            case 'l':
-                plst_data.Lref = atof(optarg);
-                if (plst_data.Lref < 0)
-                {
-                    std::cout << "Length must be positive. Falling back to 1." << std::endl;
-                    plst_data.Lref = 1.0;
-                }
-                break;
             case 'v':
-                plst_data.mu = atof(optarg);
-                if (plst_data.mu <= 0)
+                pst.mu = atof(optarg);
+                if (pst.mu <= 0)
                 {
                     std::cout << "Viscosity must be bigger than 0. Falling back to 1." << std::endl;
-                    plst_data.mu = 1.0;
+                    pst.mu = 1.0;
                 }
                 break;
             case 'a':
-                plst_data.alpha = atof(optarg);
-                if (plst_data.alpha <= 0)
+                pst.alpha = atof(optarg);
+                if (pst.alpha <= 0)
                 {
                     std::cout << "Augmentation parameter must be bigger than 0. Falling back to 1." << std::endl;
-                    plst_data.alpha = 1.;
+                    pst.alpha = 1.;
                 }
                 break;
             case 'B':
-                plst_data.Bn = atof(optarg);
-                if (plst_data.Bn < 0)
+                pst.Bn = atof(optarg);
+                if (pst.Bn < 0)
                 {
                     std::cout << "Bingham number must be positive. Falling back to 0. Solving diffusion case." << std::endl;
-                    plst_data.Bn = 0.0;
+                    pst.Bn = 0.0;
                     max_iters    = 1;
                 }
                 break;
             case 'm':
                 method_name = atoi(optarg);
                 if( method_name == 1)
-                {
-                    plst_data.method = true;
-                }
+                    pst.method = true;
                 else
                 {
                     if ( method_name == 2)
-                    {
-                        plst_data.method = false;
-                    }
+                        pst.method = false;
                     else
                     {
                         std::cout << "Method must be: Glowinski (1) or Saramito (2). Coming back to Glowinski." << std::endl;
-                        plst_data.method = true;
+                        pst.method = true;
                     }
                 }
                 break;
             case 'h':
+                refine_on = atoi(optarg);
+                    if( refine_on == 1)
+                        do_remesh = true;
+                    else
+                    {
+                        if ( refine_on == 0)
+                            do_remesh = false;
+                        else
+                        {
+                            std::cout << "Refinement: Yes (1) or No (0). Coming back to 0." << std::endl;
+                            do_remesh = false;
+                        }
+                    }
+                    break;
             case '?':
             default:
                 std::cout << "wrong arguments" << std::endl;
@@ -406,35 +381,82 @@ int main (int argc, char** argv )
         typedef disk::generic_mesh<RealType, 1>                 mesh_type;
         typedef disk::uniform_mesh_loader<RealType,1>           loader_type;
         typedef typename mesh_type::scalar_type                 scalar_type;
-        typedef Eigen::Matrix< RealType, 1, Eigen::Dynamic>     tensor_quad_matrix_type;
-        typedef Eigen::Matrix< RealType, 1, 1 >                 tensor_type; //Esto cambia para 2D y 3D
-        typedef typename mesh_type::cell                        cell_type;
-        typedef disk::quadrature<mesh_type, cell_type>          cell_quad_type;
 
         mesh_type   msh;
+
         loader_type loader(0,1,elems_1d);
         loader.populate_mesh(msh);
 
-        auto f = [](const point<RealType, mesh_type::dimension>& p) -> auto {
-            return 1.0;
-        };
+        auto f =  [](const point<RealType, mesh_type::dimension>& p) -> auto { return 1.; };
+        auto sf = [](const point<RealType, mesh_type::dimension>& p, const disk::plasticity_data<RealType>& pst)
+                    -> auto
+                    {
+                        RealType ret, fvalue(1.0), xO(0.), xL(pst.Lref);
+                        RealType  xc = pst.Lref/2.0 - 0.5*pst.Bn*pst.Lref*fvalue;
+                        if( p.x() >= xO & p.x() <  xc)
+                            ret = (xc*xc - (p.x() - xc)*(p.x() - xc));
+                        if( p.x() >= xc & p.x() <  (xL- xc))
+                            ret = xc*xc;
+                        if( p.x() <= xL & p.x() >= (xL - xc))
+                            ret = (xc*xc - (p.x() - (pst.Lref - xc))*(p.x() - (pst.Lref -xc)));
+                        return ret*(0.5*fvalue/pst.mu);
+                    };
+        auto df = [](const point<RealType, mesh_type::dimension>& p, const disk::plasticity_data<RealType>& pst)
+                    -> auto
+                    {
+                        dynamic_vector<scalar_type> ret   = dynamic_vector<scalar_type>::Zero(1);
+                        RealType  fvalue(1.), xO(0.), xL(pst.Lref);
+                        RealType  xc = pst.Lref/2.0 - 0.5*pst.Bn*pst.Lref*fvalue;
 
-        auto sf = [](const point<RealType, mesh_type::dimension>& p) -> auto {
-            return  0.0;
-        };
+                        if( p.x() >= xO & p.x() <  xc)
+                            ret(0) = - 2.*(p.x() - xc);
+                        if( p.x() >= xc & p.x() <  (xL- xc))
+                            ret(0) = 0.;
+                        if( p.x() <= xL & p.x() >= (xL - xc))
+                            ret(0) = - 2.*(p.x() - (pst.Lref - xc));
+                        ret = (0.5*fvalue/pst.mu)*ret;
+                        return ret;
+                    };
 
-        std::vector<dynamic_vector<RealType>>       Uh_Th( msh.cells_size());
-        std::vector<tensor_quad_matrix_type>        sigma_Th( msh.cells_size());
-        initialization<mesh_type,tensor_quad_matrix_type,cell_quad_type> (msh, sigma_Th, Uh_Th, degree);
-        disk::post_processing<scalar_type, 1, mesh_type> pp(msh,degree);
+        std::string         dir_name;
+        std::ofstream       its(dir_name + Error_convg);
+        std::ofstream       efs(dir_name + Error_sol);
+        size_t num_remesh = 2*refine_on;
+        auto   tsr_vec    = zero_tensor_vector(msh, degree);
 
-        for(size_t iter = 0; iter < max_iters ; iter++)
+        for( size_t imsh = 0; imsh < num_remesh + 1; imsh ++)
+        {
+            if(do_remesh & imsh > 0)
             {
-                test_diffusion(msh, f, sf, degree, plst_data, Uh_Th, sigma_Th, iter);
-                pp.vtk_writer(msh,"prueba",degree,Uh_Th,iter);
-            }
-        return 0;
+                scalar_type yield = pst.Bn * pst.f * pst.Lref;
+                disk::stress_based_mesh<mesh_type> sbm(msh,tsr_vec,yield);
+                sbm.re_populate_mesh(msh, tsr_vec, yield, degree);
+                tsr_vec    = zero_tensor_vector(msh, degree);
+                std::cout << "Refine No."<< imsh << std::endl;
+                for (auto& cl : msh)
+                {
+                    auto fcs = faces(msh, cl);
+                    std::cout << "/*       cell "<< msh.lookup(cl) <<"     */" << std::endl;
+                    std::cout << "/* faces =  [";
+                    for(auto& ifc: fcs)
+                        std::cout<< msh.lookup(ifc) <<" ";
+                    std::cout<< "] */" << std::endl;
+                }
 
+            }
+            auto Uh_Th = startup(msh, pst.Bn, dir_name, degree);
+            RealType stop_error(0.);
+            for(int iter = 0; iter < max_iters ; iter++)
+            {
+                bool brk = test_diffusion(msh, f, sf, df, degree, pst, Uh_Th, tsr_vec, stop_error,iter,its,efs,dir_name);
+                if( brk == true)
+                    break;
+            }
+        }
+
+        its.close();
+        efs.close();
+        return 0;
     }
 
     filename = argv[0];
@@ -448,47 +470,64 @@ int main (int argc, char** argv )
 
     if (std::regex_match(filename, std::regex(".*\\.typ1$") ))
     {
+
         std::cout << "Guessed mesh format: FVCA5 2D" << std::endl;
 
-
-        typedef disk::generic_mesh<RealType, 2>  mesh_type;
+        typedef disk::generic_mesh<RealType, 2>                 mesh_type;
         typedef disk::fvca5_mesh_loader<RealType, 2>            loader_type;
         typedef typename mesh_type::scalar_type                 scalar_type;
-        typedef Eigen::Matrix< RealType, 2, Eigen::Dynamic>     tensor_quad_matrix_type;
-        typedef Eigen::Matrix< RealType, 2, 1 >                 tensor_type; //Esto cambia para 2D y 3D
-        typedef typename mesh_type::cell                        cell_type;
-        typedef disk::quadrature<mesh_type, cell_type>          cell_quad_type;
+        typedef Eigen::Matrix< RealType, 2, Eigen::Dynamic>     tensor_matrix;
 
-
-        mesh_type msh;
+        mesh_type   msh;
         loader_type loader;
+
         if (!loader.read_mesh(filename))
         {
             std::cout << "Problem loading mesh." << std::endl;
             return 1;
         }
+
         loader.populate_mesh(msh);
 
         auto f = [](const point<RealType, mesh_type::dimension>& p) -> auto {
             return 1.;
         };
 
-        auto sf = [](const point<RealType, mesh_type::dimension>& p) -> auto {
+        auto sf = [](const point<RealType, mesh_type::dimension>& p, const disk::plasticity_data<RealType>& pst) -> auto {
             return 0.;
         };
+        auto df = [](const point<RealType, mesh_type::dimension>& p, const disk::plasticity_data<RealType>& pst) -> auto {
+            return dynamic_vector<scalar_type>::Zero(2);
+        };
 
-        std::vector<dynamic_vector<RealType>>    Uh_Th( msh.cells_size());
-        std::vector<tensor_quad_matrix_type>     sigma_Th( msh.cells_size());
-        initialization<mesh_type,tensor_quad_matrix_type,cell_quad_type> (msh, sigma_Th, Uh_Th, degree);
-        disk::post_processing<scalar_type, 2, mesh_type> pp(msh,degree);
-
-
-        for(size_t iter = 0; iter < max_iters ; iter++)
+        std::string         dir_name;
+        std::ofstream       its(dir_name + Error_convg);
+        std::ofstream       efs(dir_name + Error_sol);
+        size_t num_remesh = 1*refine_on;
+        auto   tsr_vec    = zero_tensor_vector(msh, degree);
+        for( size_t imsh = 0; imsh < num_remesh + 1; imsh ++)
         {
-            std::cout << "iter = "<<iter << std::endl;
-            test_diffusion(msh, f, sf, degree, plst_data, Uh_Th, sigma_Th, iter);
-            pp.vtk_writer(msh,"prueba",degree,Uh_Th,iter);
+            if(do_remesh & imsh > 0)
+            {
+                scalar_type yield = 0.5*pst.Bn * pst.f * pst.Lref;
+                disk::stress_based_mesh<mesh_type>   sbm(msh,tsr_vec,yield);
+                sbm.re_populate_mesh<loader_type>(msh, tsr_vec, yield, degree);
+                tsr_vec    = zero_tensor_vector(msh, degree);
+                std::cout << "************* Refine No.****************"<< imsh << std::endl;
+            }
+            auto Uh_Th = startup(msh, pst.Bn, dir_name, degree);
+            RealType stop_error(0.);
+            for(int iter = 0; iter < max_iters ; iter++)
+            {
+                std::cout << "/* ____iter "<<iter<<"_____ */" << std::endl;
+
+                bool brk = test_diffusion(msh, f, sf, df, degree, pst, Uh_Th, tsr_vec, stop_error,iter,its,efs,dir_name);
+                if( brk == true)
+                    break;
+            }
         }
+        its.close();
+        efs.close();
         return 0;
     }
     return 0;
