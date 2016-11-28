@@ -58,9 +58,10 @@ bool test_diffusion (MeshType& msh,       /* handle to the mesh */
            std::vector<TensorsType>& tsr_vec,
            typename MeshType::scalar_type& stop_error,
            int iter,
-           std::ofstream& its,
+           //std::ofstream& its,
            std::ofstream& efs,
-           const std::string & directory)   /* storage of tensor sigma  in each cell and in each quad point*/
+           const std::string & directory,
+            typename MeshType::scalar_type& gamma_error)   /* storage of tensor sigma  in each cell and in each quad point*/
 {
 
     //typedef disk::mesh<T,DIM,Storage>    mesh_type;
@@ -144,7 +145,8 @@ bool test_diffusion (MeshType& msh,       /* handle to the mesh */
     size_t fbs = face_basis.size();
 
     scalar_type diam        = 0.0;
-    scalar_type gamma_error = 0.0;
+    gamma_error = 0.0;
+    scalar_type gamma_error_2 = 0.0;
     scalar_type u_Ruh_error = 0.0;
 
     std::ofstream ofs( directory + "/plotnew.dat");
@@ -220,6 +222,7 @@ bool test_diffusion (MeshType& msh,       /* handle to the mesh */
             matrix_type dphi_taken  =   take(dphi_matrix, row_range, col_range);
             matrix_type dphi_rec_uh =   dphi_taken * gradrec_nopre.oper*x;
 
+            gamma_error_2  += ((gamma - dphi_rec_uh).cwiseProduct(gamma - dphi_rec_uh)).sum();
             gamma_error  += ((gamma - dphi_rec_uh).cwiseProduct(gamma - dphi_rec_uh)).sum();
             col++;
         }
@@ -231,11 +234,13 @@ bool test_diffusion (MeshType& msh,       /* handle to the mesh */
     scalar_type TOL_solver = 1.e-12;
     scalar_type TOL = 1.e-12;
     u_Ruh_error = std::sqrt(u_Ruh_error);
+    gamma_error_2 = std::sqrt(gamma_error_2);
     gamma_error = std::sqrt(gamma_error);
     scalar_type stop_criterio = std::abs(stop_error - gamma_error);
     std::cout << "l2-norm error, gamma - Du:" << gamma_error << std::endl;
+    std::cout << "l2-norm error_2, gamma - Du:" << gamma_error_2 << std::endl;
     std::cout << "l2-norm error, iterations:" << stop_criterio << std::endl;
-    its<< iter << " "<<gamma_error << std::endl;
+    //its<< iter << " "<<gamma_error << std::endl;
 
     if(gamma_error < TOL)
     {
@@ -421,34 +426,32 @@ int main (int argc, char** argv )
         std::string         dir_name;
         std::ofstream       its(dir_name + Error_convg);
         std::ofstream       efs(dir_name + Error_sol);
+        if (!its.is_open())
+          std::cout << "Error opening file";
+
         size_t num_remesh = 2*refine_on;
         auto   tsr_vec    = zero_tensor_vector(msh, degree);
 
         for( size_t imsh = 0; imsh < num_remesh + 1; imsh ++)
         {
+            pst.yield = pst.Bn * pst.f * pst.Lref;
+
             if(do_remesh & imsh > 0)
             {
-                scalar_type yield = pst.Bn * pst.f * pst.Lref;
-                disk::stress_based_mesh<mesh_type> sbm(msh,tsr_vec,yield);
-                sbm.re_populate_mesh(msh, tsr_vec, yield, degree);
+                disk::stress_based_mesh<mesh_type> sbm(msh,tsr_vec,pst.yield);
+                sbm.re_populate_mesh(msh, tsr_vec, pst.yield, degree);
                 tsr_vec    = zero_tensor_vector(msh, degree);
                 std::cout << "Refine No."<< imsh << std::endl;
-                for (auto& cl : msh)
-                {
-                    auto fcs = faces(msh, cl);
-                    std::cout << "/*       cell "<< msh.lookup(cl) <<"     */" << std::endl;
-                    std::cout << "/* faces =  [";
-                    for(auto& ifc: fcs)
-                        std::cout<< msh.lookup(ifc) <<" ";
-                    std::cout<< "] */" << std::endl;
-                }
 
             }
             auto Uh_Th = startup(msh, pst.Bn, dir_name, degree);
-            RealType stop_error(0.);
+            RealType stop_error(0.), gamma_error(0.);
             for(int iter = 0; iter < max_iters ; iter++)
             {
-                bool brk = test_diffusion(msh, f, sf, df, degree, pst, Uh_Th, tsr_vec, stop_error,iter,its,efs,dir_name);
+                //bool brk = test_diffusion(msh, f, sf, df, degree, pst, Uh_Th, tsr_vec, stop_error,iter,its,efs,dir_name, error_gamma);
+
+                bool brk = test_diffusion(msh, f, sf, df, degree, pst, Uh_Th, tsr_vec, stop_error,iter,efs,dir_name, gamma_error);
+                its<< iter << " "<<gamma_error << std::endl;
                 if( brk == true)
                     break;
             }
@@ -501,32 +504,49 @@ int main (int argc, char** argv )
         };
 
         std::string         dir_name;
-        std::ofstream       its(dir_name + Error_convg);
-        std::ofstream       efs(dir_name + Error_sol);
+        std::string         dir_error_sol = dir_name + "/Error_solution.dat";
+        //std::ofstream       ifs(dir_name + Error_convg);
+
+        std::ofstream ifs("2D_Bi4/Error_convg.dat");
+        if (!ifs.is_open())
+          std::cout << "Error opening file"<<std::endl;
+
+        std::ofstream       efs(dir_error_sol);
         size_t num_remesh = 1*refine_on;
         auto   tsr_vec    = zero_tensor_vector(msh, degree);
         for( size_t imsh = 0; imsh < num_remesh + 1; imsh ++)
         {
+            pst.yield = 0.5*pst.Bn * pst.f * pst.Lref;
+
             if(do_remesh & imsh > 0)
             {
-                scalar_type yield = 0.5*pst.Bn * pst.f * pst.Lref;
-                disk::stress_based_mesh<mesh_type>   sbm(msh,tsr_vec,yield);
-                sbm.re_populate_mesh<loader_type>(msh, tsr_vec, yield, degree);
+                std::cout << "************* Refinement No.****************"<< imsh << std::endl;
+                std::cout << "============================================"<< imsh << std::endl;
+
+                disk::stress_based_mesh<mesh_type>   sbm(msh,tsr_vec,pst.yield, false);
+
+                sbm.re_populate_mesh<loader_type>(msh, tsr_vec, pst.yield, degree);
                 tsr_vec    = zero_tensor_vector(msh, degree);
-                std::cout << "************* Refine No.****************"<< imsh << std::endl;
+                std::cout << "============================================"<< imsh << std::endl;
+
+                dump_to_matlab(msh,"sub_mesh_1.m");
             }
+
             auto Uh_Th = startup(msh, pst.Bn, dir_name, degree);
-            RealType stop_error(0.);
+            RealType stop_error(0.), gamma_error(0.);;
             for(int iter = 0; iter < max_iters ; iter++)
             {
                 std::cout << "/* ____iter "<<iter<<"_____ */" << std::endl;
+                //bool brk = test_diffusion(msh, f, sf, df, degree, pst, Uh_Th, tsr_vec, stop_error,iter,its,efs,dir_name);
 
-                bool brk = test_diffusion(msh, f, sf, df, degree, pst, Uh_Th, tsr_vec, stop_error,iter,its,efs,dir_name);
+                bool brk = test_diffusion(msh, f, sf, df, degree, pst, Uh_Th, tsr_vec, stop_error,iter,efs,dir_name,gamma_error);
+                ifs<< iter << " "<<gamma_error << std::endl;
+
                 if( brk == true)
                     break;
             }
         }
-        its.close();
+        ifs.close();
         efs.close();
         return 0;
     }
