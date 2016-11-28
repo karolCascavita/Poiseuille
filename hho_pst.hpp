@@ -26,7 +26,7 @@ namespace disk {
 template<typename T>
 struct plasticity_data
 {
-    plasticity_data(): Lref(1.), Vref(1.), Bn(0.1), mu(1.), alpha(1.), f(1.),method(true)
+    plasticity_data(): Lref(1.), Vref(1.), Bn(0.1),mu(1.), alpha(1.), f(1.),method(true)
     {}
     T f;                    //WK: Cuidado porque f deberia ser el valor externo de la fuente.
     T Lref;                 /* Charactetistic length */
@@ -34,6 +34,7 @@ struct plasticity_data
     T Bn;                   /* Bingham number */
     T mu;                   /* viscosity */
     T alpha;
+    T yield;
     bool   method;
 };
 
@@ -47,6 +48,7 @@ public:
     tensors(){};
 
     template< typename MeshType>
+    void
     zero_tensor(const MeshType& msh, const typename MeshType::cell& cl, const size_t degree)
     {
         typedef MeshType                                    mesh_type;
@@ -449,14 +451,12 @@ public:
 
     plasticity()                = delete;
     plasticity(const size_t degree, const plasticity_data<T>& pst)
-    //WK: for mu as tensor one should chech this part
-        : m_degree(degree), m_alpha(pst.alpha)
+    //WK: for mu as tensor one should check this part
+        : m_degree(degree), m_alpha(pst.alpha), m_yield(pst.yield)
     {
         cell_basis          = cell_basis_type(m_degree+1);
         cell_quadrature     = cell_quadrature_type(2*(m_degree+1));
         face_basis          = face_basis_type(m_degree);
-
-        m_yield   = pst.Bn*pst.f*pst.Lref*0.5;
 
         if(pst.method == true)
             m_method_coef = 1. / m_alpha ;
@@ -516,7 +516,6 @@ public:
             }
             ++cont;
         }
-
     }
 };
 
@@ -611,13 +610,6 @@ public:
         storage_rm->boundary_nodes.at(0) = true;
         storage_rm->boundary_nodes.at(num_rm_pts - 1) = true;
 
-        for(auto& cl:re_msh)
-        {
-            auto test_p = points(re_msh,cl);
-            size_t cell_id = re_msh.lookup(cl);
-            std::cout << "points("<< cell_id<<") =  ["<< test_p[0].x() << ","<< test_p[1].x()<<"]"<< std::endl;
-        }
-
         msh = re_msh;
     }
 
@@ -635,7 +627,8 @@ public:
     typedef typename mesh_type::cell                cell_type;
     typedef typename mesh_type::cell_iterator       cell_itor;
 
-    std::vector<bool> cl_marks_vector;
+    bool m_hanging_nodes;
+    std::vector<size_t> cl_marks_vector;
     //std::vector<std::pair<bool,typename point<T,2>::id_type>> fc_marks_vector;
     std::vector<std::pair<bool,int>> fc_marks_vector;
     std::vector<std::array<ident_impl_t, 4>>        m_edges;
@@ -646,9 +639,58 @@ public:
     std::vector<std::array<ident_impl_t, 5>>        m_pentagons;
     std::vector<std::array<ident_impl_t, 6>>        m_hexagons;
 
-    stress_based_mesh(const mesh_type& msh,const std::vector<tensors<T>>& tsr_vec,const T yield)
+    stress_based_mesh(const mesh_type& msh,
+                        const std::vector<tensors<T>>& tsr_vec,
+                        const T yield,
+                        bool hanging_ndoes):m_hanging_nodes(hanging_ndoes)
     {
-        std::vector<bool> vec(msh.cells_size(),false);
+        if(m_hanging_nodes)
+            cl_marks_vector = cells_marker_with_hanging_nodes(msh,tsr_vec,yield);
+        else
+            cl_marks_vector = cells_marker(msh,tsr_vec,yield);
+            for(size_t cm = 0; cm < cl_marks_vector.size(); cm++)
+            {
+                size_t b = cl_marks_vector.at(cm);
+                std::cout<<b<<"  ";
+            }
+            std::cout<<" ]"<<std::endl;
+
+        fc_marks_vector.resize(msh.faces_size());
+        for(size_t i = 0; i < fc_marks_vector.size(); i++)
+            fc_marks_vector.at(i).first = false;
+    }
+    template< size_t N>
+    struct n_gon
+    {
+       std::array<size_t, N>  p;
+       std::array<bool, N>    b;
+    };
+
+    std::vector<size_t>
+    cells_marker_with_hanging_nodes(const mesh_type& msh,
+                        const std::vector<tensors<T>>& tsr_vec,
+                        const T yield)
+    {
+        std::vector<size_t> vec(msh.cells_size());
+
+        for(size_t i = 0; i < tsr_vec.size();i++)
+        {
+            auto mat = tsr_vec.at(i).xi_norm;
+            if(std::abs(mat.maxCoeff()) >=  yield)
+            {
+                if (std::abs(mat.minCoeff()) < yield)
+                    vec.at(i) = 1;
+            }
+        }
+        return vec;
+    }
+
+    std::vector<size_t>
+    cells_marker(const mesh_type& msh,
+            const std::vector<tensors<T>>& tsr_vec,
+            const T yield)
+    {
+        std::vector<size_t> vec(msh.cells_size());
 
         for(size_t i = 0; i < tsr_vec.size();i++)
         {
@@ -656,17 +698,41 @@ public:
             if(std::abs(mat.maxCoeff()) >=  yield)
             {
                 if (std::abs(mat.minCoeff())< yield)
-                    vec.at(i) = true;
+                    vec.at(i) = 3;
             }
         }
-        cl_marks_vector = vec;
-        fc_marks_vector.resize(msh.faces_size());
-        for(size_t i = 0; i < fc_marks_vector.size(); i++)
-            fc_marks_vector.at(i).first = false;
+        return vec;
     }
+   template<typename U, size_t N, size_t M>
+    void store(const n_gon<N> & t,  std::vector<std::array<U, M>>& m_n_gons)
+    {
+        if(M == N)
+            m_n_gons.push_back(t.p);
+        else
+            throw std::invalid_argument("Polygon cannot be store");
+
+         // Mejorar todo esto!!! para que no quede repetido
+         for(size_t i = 0; i < N - 1; i++)
+         {
+             auto a = t.p[i];
+             auto b = t.p[i+1];
+             if(b < a)
+                 std::swap(a,b);
+             m_edges.push_back({a, b});
+             if(t.b[i])
+                 m_boundary_edges.push_back({a , b});
+         }
+         auto a = t.p[0];
+         auto b = t.p[N-1];
+         if(b < a)
+             std::swap(a,b);
+         m_edges.push_back({a , b});
+         if(t.b[N -1])
+             m_boundary_edges.push_back({a , b });
+     }
 
     void
-    faces_marker(mesh_type & msh)
+    marker_with_hanging_nodes(mesh_type & msh)
     {
         auto cmv_temp = cl_marks_vector;
 
@@ -676,7 +742,7 @@ public:
             auto cl_id   = msh.lookup(cl);
             auto cl_mark = cl_marks_vector.at(cl_id);
 
-            if(cl_mark)
+            if(cl_mark == 1)
             {
                 auto fcs = faces(msh,cl);
                 for(auto& fc:fcs)
@@ -684,8 +750,7 @@ public:
                     if(!msh.is_boundary(fc))
                     {
                         auto  neighbor_id   = face_owner_cells_ids(msh,fc,cl);
-                        cmv_temp.at(neighbor_id) = true;
-                        //std::cout << "inside marker, ngh found = "<<neighbor_id << std::endl;
+                        cmv_temp.at(neighbor_id) = 1;
                         auto  neighbor      = *(msh.cells_begin() + size_t(neighbor_id));
                         auto  neighbor_fcs  = faces(msh,neighbor);
                         for(auto& nfc : neighbor_fcs)
@@ -694,19 +759,16 @@ public:
 
                             if(!fc_marks_vector.at(nfc_id).first)
                             {
-                                //std::cout << "inside marker, marking = "<<nfc_id << std::endl;
                                 fc_marks_vector.at(nfc_id).first  = true;
                                 auto bar = barycenter(msh,nfc);
                                 storage ->points.push_back(bar);
-                                //std::cout << "/* new_point_pos = "<<storage->points.size()<<" */" << std::endl;
-                                fc_marks_vector.at(nfc_id).second = storage->points.size() ;
+                                fc_marks_vector.at(nfc_id).second = storage->points.size() -1;
                                 //WK: this should be with an id_type instead of using ints
 
                                 if(!msh.is_boundary(nfc))
                                 {
                                     auto  nn_id   = face_owner_cells_ids(msh,nfc,cl);
-                                    cmv_temp.at(nn_id) = true;
-                                    //std::cout << "inside marker, marking nn cell = "<<nn_id << std::endl;
+                                    cmv_temp.at(nn_id) = 1;
                                 }
                             }
                         }
@@ -718,20 +780,95 @@ public:
                         fc_marks_vector.at(fc_id).first  = true;
                         auto bar = barycenter(msh,fc);
                         storage ->points.push_back(bar);
-                        fc_marks_vector.at(fc_id).second = storage->points.size();
+                        fc_marks_vector.at(fc_id).second = storage->points.size() -1;
                     }
                 }
             }
         }
-        cl_marks_vector = cmv_temp;
-
     }
-    template< size_t N>
-    struct n_gon
+
+    void
+    set_marks(mesh_type & msh, const cell_type & cl)
     {
-       std::array<size_t, N>  p;
-       std::array<bool, N>    b;
-   };
+        typedef typename cell_type::id_type         cell_id_type;
+
+        auto storage = msh.backend_storage();
+        auto cl_id   = msh.lookup(cl);
+        auto cl_mark = cl_marks_vector.at(cl_id);
+
+        if(cl_mark > 1  &  cl_mark < 4)
+        {
+            auto fcs = faces(msh,cl);
+            for(auto& fc:fcs)
+            {
+                if(!msh.is_boundary(fc))
+                {
+                    auto  neighbor_id = face_owner_cells_ids(msh,fc,cl);
+                    auto  ngh_mark    = cl_marks_vector.at(neighbor_id);
+                    auto  fc_id    = msh.lookup(fc);
+                    if(!fc_marks_vector.at(fc_id).first)
+                    {
+                        fc_marks_vector.at(fc_id).first  = true;
+                        auto bar = barycenter(msh,fc);
+                        storage ->points.push_back(bar);
+                        fc_marks_vector.at(fc_id).second = storage->points.size() -1;
+                    }
+                    if(ngh_mark < cl_mark)
+                    {
+                        if(ngh_mark == 1)
+                            cl_marks_vector.at(neighbor_id) = 2;
+                        else
+                            cl_marks_vector.at(neighbor_id) = cl_mark - 1;
+                        auto  ngh = *(msh.cells_begin() + size_t(neighbor_id));
+                        set_marks(msh,ngh);
+                    }
+
+                        #if 0
+                        auto  ngh      = *(msh.cells_begin() + size_t(ngh_id));
+                        auto  ngh_fcs  = faces(msh,ngh);
+
+                        for(auto& nfc : ngh_fcs)
+                        {
+                            auto  nfc_id  = msh.lookup(nfc);
+
+                            if(!fc_marks_vector.at(nfc_id).first)
+                            {
+                                fc_marks_vector.at(nfc_id).first  = true;
+                                auto bar = barycenter(msh,nfc);
+                                storage ->points.push_back(bar);
+                                fc_marks_vector.at(nfc_id).second = storage->points.size() ;
+                            }
+                        }
+                        #endif
+
+                }
+                else
+                {
+                    auto  fc_id    = msh.lookup(fc);
+                    fc_marks_vector.at(fc_id).first  = true;
+                    auto bar = barycenter(msh,fc);
+                    storage ->points.push_back(bar);
+                    fc_marks_vector.at(fc_id).second = storage->points.size() -1;
+                }
+            }
+        }
+
+        //else
+        //    throw std::logic_error("shouldn't have arrived here");
+    }
+    void
+    marker(mesh_type& msh)
+    {
+        auto cmv_initial = cl_marks_vector;
+        auto storage = msh.backend_storage();
+        for(auto& cl : msh)
+        {
+            auto cl_id   = msh.lookup(cl);
+            bool cl_mark = cmv_initial.at(cl_id);
+            if(cl_mark)
+                set_marks(msh, cl);
+        }
+    }
 
    template<size_t N, typename NGon, typename FaceIds>
    n_gon<N>
@@ -739,76 +876,104 @@ public:
    {
         n_gon<N> nt;
 
-        std::cout<<"triangle hanging = [";
-        for(auto& m:t.p)
-            std::cout << m<<" ";
-        std::cout<<" ]" << std::endl;
-
        for(size_t i = 0, j = 0; i < num_fcs; i++, j++)
        {
            auto fc_mark = fc_marks_vector.at(fcs_ids[i]).first;
            nt.p[j] = t.p[i];
            nt.b[j] = t.b[i];
-
-           std::cout << "nt.p["<<j<<"] = "<< nt.p[j] << std::endl;
-           std::cout << "t.p["<<i<<"] = "<< t.p[i] << std::endl;
-
            if(fc_mark)
             {
                 j++;
                 nt.p[j] = fc_marks_vector.at(fcs_ids[i]).second;
                 nt.b[j] = t.b[i];
-                std::cout << "nt.p["<<j<<"] = "<< nt.p[j] << std::endl;
             }
        }
-       std::cout<<"triangle hanging d = [";
-       for(auto& m:nt.p)
-           std::cout << m<<" ";
-       std::cout<<" ]" << std::endl;
-
        return nt;
    }
 
-   template<typename U, size_t N, size_t M>
-    //                               std::vector<std::array<ident_impl_t, 4>>
-   void store(const n_gon<N> & t,  std::vector<std::array<U, M>>& m_n_gons)
-   {
-
-       if(M==N)
-           m_n_gons.push_back(t.p);
-
-        // Mejorar todo esto!!! para que no quede repetido
-        for(size_t i = 0; i < N - 1; i++)
-        {
-            auto a = t.p[i];
-            auto b = t.p[i+1];
-            if(b < a)
-                std::swap(a,b);
-            m_edges.push_back({a, b});
-            if(t.b[i])
-                m_boundary_edges.push_back({a , b});
-        }
-        auto a = t.p[0];
-        auto b = t.p[N-1];
-        if(b < a)
-            std::swap(a,b);
-        m_edges.push_back({a , b});
-        if(t.b[N -1])
-            m_boundary_edges.push_back({a , b });
-    }
 
     void refine_single(const mesh_type& msh, const cell_type& cl)
     {
-        //for(auto& cl:msh)
-        //{
+        n_gon<3> t;
+
+        auto storage = msh.backend_storage();
+        auto pts_ids = cl.point_ids();
+        auto fcs_ids = cl.faces_ids();
+        auto num_fcs = fcs_ids.size();
+        auto cl_id   = msh.lookup(cl);
+        auto cl_mark = cl_marks_vector.at(cl_id);
+
+        for(size_t i = 0; i < num_fcs; i++)
+        {
+            auto id  = fcs_ids.at(i);
+            auto fc_mark = fc_marks_vector.at(id).first;
+            t.p[i]   = pts_ids.at(i);
+            t.b[i]   = storage->boundary_edges.at(id);
+        }
+
+        if(cl_mark > 1 )
+        {
+            n_gon<3> t0,t1,t2,t3;
+            auto bar0pos = fc_marks_vector.at(fcs_ids[0]).second;
+            auto bar1pos = fc_marks_vector.at(fcs_ids[1]).second;
+            auto bar2pos = fc_marks_vector.at(fcs_ids[2]).second;
+
+            t0.p[0] = t.p[0];   t0.p[1] = bar0pos;  t0.p[2] = bar2pos;
+            t1.p[0] = bar0pos;  t1.p[1] = t.p[1];   t1.p[2] = bar1pos;
+            t2.p[0] = bar2pos;  t2.p[1] = bar1pos;  t2.p[2] = t.p[2];
+            t3.p[0] = bar0pos;  t3.p[1] = bar1pos;  t3.p[2] = bar2pos;
+
+            t0.b[0] = t.b[0];   t0.b[1] = false;    t0.b[2] = t.b[2];
+            t1.b[0] = t.b[0];   t1.b[1] = t.b[1];   t1.b[2] = false;
+            t2.b[0] = false;    t2.b[1] = t.b[1];   t2.b[2] = t.b[2];
+            t3.b[0] = false;    t3.b[1] = false;    t3.b[2] = false;
+
+            store(t0,m_triangles);
+            store(t1,m_triangles);
+            store(t2,m_triangles);
+            store(t3,m_triangles);
+        }
+
+        if(cl_mark == 1)
+        {
+            n_gon<3> t0,t1;
+
+            t0.p[0] = t.p[0];   t0.p[1] = t.p[1];   t0.p[2] = t.p[2];
+            t1.p[0] = t.p[1];   t1.p[1] = t.p[2];   t1.p[2] = t.p[0];
+
+            t0.b[0] = t.b[0];   t0.b[1] = t.b[1];   t0.b[2] = t.b[2];
+            t1.b[0] = t.b[1];   t1.b[1] = t.b[2];   t1.b[2] = t.b[0];
+
+            std::array<int, 3> permut = {2,0,1};
+
+            for(size_t i = 0; i < num_fcs; i++)
+            {
+                auto id  = fcs_ids.at(i);
+                auto fc_mark = fc_marks_vector.at(id).first;
+
+                if(fc_mark)
+                {
+                    auto barpos = fc_marks_vector.at(fcs_ids[i]).second;
+                    t0.p[i] = barpos;           t1.p[i] = barpos;
+                    t0.b[permut[i]] = false;    t1.b[i] = false;
+                }
+            }
+            store(t0,m_triangles);
+            store(t1,m_triangles);
+        }
+    }
+
+
+    void refine_single_with_hanging_nodes(const mesh_type& msh, const cell_type& cl)
+    {
+            auto storage = msh.backend_storage();
+
             auto count   = 0;
             auto pts_ids = cl.point_ids();
             auto fcs_ids = cl.faces_ids();
             auto num_fcs = fcs_ids.size();
 
-            std::cout << "/* refine_single */  "<<msh.lookup(cl) << std::endl;
-
-            //for trinagles
+            //for triangles
             n_gon<3> t;
 
             for(size_t i = 0; i < num_fcs; i++)
@@ -816,17 +981,13 @@ public:
 
                 auto id  = fcs_ids.at(i);
                 auto fc_mark = fc_marks_vector.at(id).first;
-                t.p[i]   = pts_ids.at(i) + 1; // Since later in populate_mesh values are subtract  by 1
-                t.b[i]   = fc_mark;
+                t.p[i]   = pts_ids.at(i);
+                t.b[i]   = storage->boundary_edges.at(id);
                 if(fc_mark)
                     count++;
             }
-            auto num_split_fcs =  count;
 
-            //std::cout<<"triangle = [";
-            //for(auto& m:t.p)
-            //    std::cout << m<<" ";
-            //std::cout<<" ]" << std::endl;
+            auto num_split_fcs =  count;
 
             if( num_split_fcs == 3)
             {
@@ -849,40 +1010,19 @@ public:
                 store(t1,m_triangles);
                 store(t2,m_triangles);
                 store(t3,m_triangles);
-                std::cout<<"triangle  d0 = [" ;
-                for(auto& m:t0.p)
-                    std::cout << m<<" ";
-                std::cout<<" ]" << std::endl;
-                std::cout<<"triangle  d1 = [" ;
-                for(auto& m:t1.p)
-                    std::cout << m<<" ";
-                std::cout<<" ]" << std::endl;
-                std::cout<<"triangle  d2 = [";
-                for(auto& m:t2.p)
-                    std::cout << m<<" ";
-                std::cout<<" ]" << std::endl;
-                std::cout<<"triangle  d3 = [";
-                for(auto& m:t3.p)
-                    std::cout << m<<" ";
-                std::cout<<" ]" << std::endl;
+
             }
-            else
+            //Esto hay que revisarlo para una segunda adaptacion, puesto que ya hay polygonos
+            if(num_split_fcs == 1)
             {
-                //Esto hay que revisarlo para una segunda adaptacion, puesto que ya hay polygonos
-                if(num_split_fcs == 1)
-                {
-                    auto nt = n_gon_with_hanging_node<4>(num_fcs,fcs_ids,t);
-                    store(nt,m_quadrangles);
-                }
-                if(num_split_fcs == 2)
-                {
-                    auto nt = n_gon_with_hanging_node<5>(num_fcs,fcs_ids,t);
-                    store(nt,m_pentagons);
-                }
-
+                auto nt = n_gon_with_hanging_node<4>(num_fcs,fcs_ids,t);
+                store(nt,m_quadrangles);
             }
-        //}
-
+            if(num_split_fcs == 2)
+            {
+                auto nt = n_gon_with_hanging_node<5>(num_fcs,fcs_ids,t);
+                store(nt,m_pentagons);
+            }
     }
 
     void
@@ -894,26 +1034,40 @@ public:
     }
 
     template<typename LoaderType>
-    void re_populate_mesh(mesh_type & msh,
+    void re_populate_mesh( mesh_type & msh,
                             const std::vector<tensors<T>>& tsr_vec,
                             const T yield,
                             const int degree)
     {
-        mesh_type re_msh;
+        mesh_type re_msh, re_msh_2;
+
+
+        re_msh = msh;
 
         auto storage    = msh.backend_storage();
-        auto storage_rm = re_msh.backend_storage();
+        auto re_storage = re_msh.backend_storage();
         auto num_cells  = msh.cells_size();
         size_t nds_counter = 0;
 
-        faces_marker(msh);
+        if(m_hanging_nodes)
+            marker_with_hanging_nodes(re_msh);
+        else
+            marker(re_msh);
+
+        dump_to_matlab(msh,"mesh.m",cl_marks_vector);
+
         for(auto& cl:msh)
         {
             auto cl_id   = msh.lookup(cl);
             auto cl_mark = cl_marks_vector.at(cl_id);
 
-            if(cl_mark)
-                refine_single(msh,cl);
+            if(cl_mark > 0)
+            {
+                if(m_hanging_nodes)
+                    refine_single_with_hanging_nodes(msh,cl);
+                else
+                    refine_single(msh,cl);
+            }
             else
             {
                 auto pts_ids = cl.point_ids();
@@ -924,9 +1078,8 @@ public:
                 {
                     auto pts_ids = cl.point_ids();
                     auto id  = fcs_ids.at(i);
-                    auto fc_mark = fc_marks_vector.at(id).first;
-                    t.p[i]   = pts_ids.at(i) + 1; // Since later in populate_mesh values are subtract  by 1
-                    t.b[i]   = fc_mark;
+                    t.p[i]   = pts_ids.at(i); // Since later in populate_mesh values are subtract  by 1
+                    t.b[i]   = storage->boundary_edges.at(id);
                 }
                 store(t,m_triangles);
             }
@@ -937,43 +1090,22 @@ public:
         auto uniq_iter = std::unique(m_edges.begin(), m_edges.end());
         m_edges.erase(uniq_iter, m_edges.end());
 
-        std::cout << " edge = [" << std::endl;
-        for(auto& v : m_edges)
-        {
-            std::cout<<"         "<< v[0] <<" " <<v[1]<<std::endl;
-        }
-        std::cout <<"] " <<std::endl;
-
-
-                std::cout << "surfaces = [" << std::endl;
-                for(auto& v : m_triangles)
-                {
-                    std::cout<<"         "<< v[0] <<" " <<v[1]<<" " <<v[2] <<"," <<std::endl;
-                }
-                for(auto& v : m_quadrangles)
-                {
-                    std::cout<<"         "<< v[0] <<" " <<v[1]<<" " <<v[2] <<","<<v[3]<<" "  <<std::endl;
-                }
-                for(auto& v : m_pentagons)
-                {
-                    std::cout<<"         "<< v[0] <<" " <<v[1]<<" " <<v[2] <<" "<<v[3]<<" " <<v[4] <<"," <<std::endl;
-                }
-
-                std::cout <<"] " <<std::endl;
-
-        LoaderType    loader;
-        loader.m_edges      = m_edges;
-        loader.m_points     = storage->points;
+        LoaderType      loader;
+        loader.m_edges        = m_edges;
         loader.m_triangles    = m_triangles;
         loader.m_quadrangles  = m_quadrangles;
         loader.m_pentagons    = m_pentagons;
         loader.m_hexagons     = m_hexagons;
         loader.m_boundary_edges = m_boundary_edges;
-        //loader.m_hexagons  = m_ennagons;
+        //loader.m_ennagons  = m_ennagons;
 
-        loader.populate_mesh(re_msh);
+        loader.m_points     = re_storage->points;
 
-        msh = re_msh;
+        auto storage_rm2  = re_msh_2.backend_storage();
+
+        loader.populate_mesh(re_msh_2);
+        msh = re_msh_2;
+
     }
 
 };
