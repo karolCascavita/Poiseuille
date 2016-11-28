@@ -572,6 +572,7 @@ private:
 
         }
         template<typename Solution, typename Gradient>
+        void
         compute(const mesh_type &   msh,
                 const cell_type &   cl,
                 const Solution  &   solution,
@@ -700,6 +701,7 @@ private:
 
 template<typename T, size_t DIM, typename Storage, typename TensorsType,
             typename Function, typename Gradient>
+void
 plasticity_post_processing( mesh<T,DIM,Storage>&  msh,
                             const Function &            sf,
                             const Gradient &            df,
@@ -746,10 +748,17 @@ plasticity_post_processing( mesh<T,DIM,Storage>&  msh,
     std::string solution_file  = directory + "/solution";
     std::string gamma_file     = directory + "/gamma";
     std::string xi_norm_file   = directory + "/xi_norm";
+    std::string xi_funct_file  = directory + "/xi_function";
+
+
     pp.vtk_writer(msh, solution_file ,degree,Uh_Th,iter);
 
     typedef std::vector<Eigen::Matrix<T,Eigen::Dynamic, Eigen::Dynamic>>  dyn_mat_vec;
-    dyn_mat_vec     siglam_Th(msh.cells_size()), gamma_Th(msh.cells_size()), xi_norm_Th(msh.cells_size());
+    dyn_mat_vec     siglam_Th(msh.cells_size()), gamma_Th(msh.cells_size()), xi_norm_Th(msh.cells_size()), xi_function(msh.cells_size());
+
+
+    typedef Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>     tensor_matrix;
+    tensor_matrix vec;
 
     for(auto& cl:msh)
     {
@@ -757,10 +766,20 @@ plasticity_post_processing( mesh<T,DIM,Storage>&  msh,
         siglam_Th.at(id)  = tsr_vec.at(id).siglam;
         gamma_Th.at(id)   = tsr_vec.at(id).gamma;
         xi_norm_Th.at(id) = tsr_vec.at(id).xi_norm;
+
+        auto xi_norm_vec  = tsr_vec.at(id).xi_norm;
+        vec = tensor_matrix::Zero(1,xi_norm_vec.size());
+        for(size_t i = 0; i < xi_norm_vec.size(); i++)
+        {
+            if (xi_norm_vec(i) >= pst.yield)
+                vec(0,i) = 1.;
+        }
+        xi_function.at(id) = vec;
     }
     pp.tensor_norm_vtk_writer(msh, constraint_file, degree, siglam_Th, iter);
     pp.tensor_norm_vtk_writer(msh, gamma_file,      degree, gamma_Th, iter);
     pp.tensor_norm_vtk_writer(msh, xi_norm_file,    degree, xi_norm_Th, iter);
+    pp.tensor_norm_vtk_writer(msh, xi_funct_file,   degree, xi_function, iter);
 };
 
 
