@@ -380,15 +380,18 @@ public:
 
     bool populate_mesh(mesh_type& msh)
     {
+
+
+
         std::cout << " *** POPULATING FVCA5 MESH ***" << std::endl;
         auto storage = msh.backend_storage();
 
-        std::cout << "/* message Points */" << std::endl;
+        //std::cout << "/* message Points */" << std::endl;
         /* Points */
         size_t nodes_size = m_points.size();
         storage->points = std::move(m_points);
 
-        std::cout << "/* message Nodes */" << std::endl;
+        //std::cout << "/* message Nodes */" << std::endl;
         /* Nodes */
         std::vector<node_type> nodes(nodes_size);
         for (size_t i = 0; i < nodes_size; i++)
@@ -396,7 +399,7 @@ public:
 
         storage->nodes = std::move(nodes);
 
-        std::cout << "/* message Edges */" << std::endl;
+        //std::cout << "/* message Edges */" << std::endl;
         /* Edges */
         /* Make the vector containing the edges */
         std::vector<edge_type> edges;
@@ -447,7 +450,7 @@ public:
         }
         storage->edges = std::move(edges);
 
-        std::cout << "/* message Surface */" << std::endl;
+        //std::cout << "/* message Surface */" << std::endl;
         /* Surfaces */
         std::vector<surface_type> surfaces;
         surfaces.reserve( m_triangles.size() +
@@ -456,11 +459,11 @@ public:
                           m_hexagons.size() +
                           m_ennagons.size() );
 
-        std::cout << "/* message Put Polygons*/" << std::endl;
-        std::cout << "/* triangles */" << std::endl;
+        //std::cout << "/* message Put Polygons*/" << std::endl;
+        //std::cout << "/* triangles */" << std::endl;
         put_polygons(msh, m_triangles, surfaces);
         m_triangles.clear();
-        std::cout << "/* quadrangles */" << std::endl;
+        //std::cout << "/* quadrangles */" << std::endl;
 
         put_polygons(msh, m_quadrangles, surfaces);
         m_quadrangles.clear();
@@ -478,7 +481,7 @@ public:
 
         storage->surfaces = std::move(surfaces);
 
-        std::cout << "/* message Print stats*/" << std::endl;
+        //std::cout << "/* message Print stats*/" << std::endl;
         /* Print stats */
         storage->statistics();
 
