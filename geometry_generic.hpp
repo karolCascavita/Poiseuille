@@ -237,7 +237,18 @@ diameter(const generic_mesh<T,1>&, const typename generic_mesh<T,1>::face&)
 {
     return 1.;
 }
-
+template<typename T,  size_t DIM>
+T
+diameter(const generic_mesh<T,DIM>& msh)
+{
+    T diam = T(0);
+    for(auto& cl : msh)
+    {
+        auto cl_diam = diameter(msh, cl);
+        diam = std::max(diam, cl_diam);
+    }
+    return diam;
+}
 /* Compute the barycenter of a 2-face */
 template<typename T>
 point<T,2>
