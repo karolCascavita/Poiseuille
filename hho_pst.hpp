@@ -34,7 +34,6 @@ directory(const T Bi, const std::string& name)
     std::cout << "dir_name  = "<< dir_name << std::endl;
     return dir_name;
 }
-
 template<typename T>
 struct plasticity_data
 {
