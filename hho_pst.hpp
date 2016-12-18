@@ -23,6 +23,18 @@
 
 namespace disk {
 
+template<typename T,size_t DIM>
+std::string
+directory(const T Bi, const std::string& name)
+{
+    auto Bi_str  = to_string(int(10* Bi));
+    auto DIM_str = to_string(DIM);
+
+    std::string dir_name    =   name + "/" + DIM_str + "D_Bi" + Bi_str;
+    std::cout << "dir_name  = "<< dir_name << std::endl;
+    return dir_name;
+}
+
 template<typename T>
 struct plasticity_data
 {
@@ -37,6 +49,7 @@ struct plasticity_data
     T yield;
     bool   method;
 };
+
 
 template<typename T>
 struct tensors
@@ -202,152 +215,6 @@ public:
     }
 };
 
-template<typename MeshType, //typename CellBasisType, typename CellQuadType,
-                        typename FaceBasisType, typename FaceQuadType>
-class assembler_pst
-{
-    typedef MeshType                            mesh_type;
-    typedef typename mesh_type::scalar_type     scalar_type;
-    typedef typename mesh_type::cell            cell_type;
-    typedef typename mesh_type::face            face_type;
-
-    //typedef CellBasisType                       cell_basis_type;
-    //typedef CellQuadType                        cell_quadrature_type;
-    typedef FaceBasisType                       face_basis_type;
-    typedef FaceQuadType                        face_quadrature_type;
-
-    typedef dynamic_matrix<scalar_type>         matrix_type;
-    typedef dynamic_vector<scalar_type>         vector_type;
-
-    //cell_basis_type                             cell_basis;
-    //cell_quadrature_type                        cell_quadrature;
-
-    face_basis_type                             face_basis;
-    face_quadrature_type                        face_quadrature;
-
-    size_t                                      m_degree;
-
-    typedef Eigen::SparseMatrix<scalar_type>    sparse_matrix_type;
-    typedef Eigen::Triplet<scalar_type>         triplet_type;
-
-    std::vector<triplet_type>                   m_triplets;
-    size_t                                      m_num_unknowns;
-
-public:
-
-    sparse_matrix_type      matrix;
-    vector_type             rhs;
-
-    assembler_pst()               = delete;
-    assembler_pst(const assembler_pst&) = delete;
-    assembler_pst(assembler_pst&&)      = delete;
-
-    assembler_pst(const MeshType& msh, const size_t degree)
-        : m_degree(degree)
-    {
-        face_basis          = face_basis_type(m_degree);
-        face_quadrature     = face_quadrature_type(2*m_degree);
-
-        m_num_unknowns = face_basis.size() * (msh.faces_size() + msh.boundary_faces_size());
-        matrix = sparse_matrix_type(m_num_unknowns, m_num_unknowns);
-        rhs = vector_type::Zero(m_num_unknowns);
-    }
-
-    template<typename LocalContrib>
-    void
-    assemble(const mesh_type& msh, const cell_type& cl, const LocalContrib& lc)
-    {
-        auto fcs = faces(msh, cl);
-        std::vector<size_t> l2g(fcs.size() * face_basis.size());
-        for (size_t face_i = 0; face_i < fcs.size(); face_i++)
-        {
-            auto fc = fcs[face_i];
-            auto eid = find_element_id(msh.faces_begin(), msh.faces_end(), fc);
-            if (!eid.first)
-                throw std::invalid_argument("This is a bug: face not found");
-
-            auto face_id = eid.second;
-
-            auto face_offset = face_id * face_basis.size();
-
-            auto pos = face_i * face_basis.size();
-
-            for (size_t i = 0; i < face_basis.size(); i++)
-                l2g[pos+i] = face_offset+i;
-        }
-
-        assert(lc.first.rows() == lc.first.cols());
-        assert(lc.first.rows() == lc.second.size());
-        assert(lc.second.size() == l2g.size());
-
-        //std::cout << lc.second.size() << " " << l2g.size() << std::endl;
-
-        for (size_t i = 0; i < lc.first.rows(); i++)
-        {
-            for (size_t j = 0; j < lc.first.cols(); j++)
-                m_triplets.push_back( triplet_type( l2g.at(i), l2g.at(j), lc.first(i,j) ) );
-
-            rhs(l2g.at(i)) += lc.second(i);
-        }
-    }
-    template<typename Function, typename PlasticData>
-    void
-    impose_boundary_conditions(mesh_type& msh, const Function& bc, const PlasticData& pst)
-    {
-        size_t fbs = face_basis.size();
-        size_t face_i = 0;
-        for (auto itor = msh.boundary_faces_begin(); itor != msh.boundary_faces_end(); itor++)
-        {
-            auto bfc = *itor;
-
-            auto eid = find_element_id(msh.faces_begin(), msh.faces_end(), bfc);
-            if (!eid.first)
-                throw std::invalid_argument("This is a bug: face not found");
-
-            auto face_id = eid.second;
-
-            auto face_offset = face_id * fbs;
-            auto face_offset_lagrange = (msh.faces_size() + face_i) * fbs;
-
-            auto fqd = face_quadrature.integrate(msh, bfc);
-
-            matrix_type MFF     = matrix_type::Zero(fbs, fbs);
-            vector_type rhs_f   = vector_type::Zero(fbs);
-
-            for (auto& qp : fqd)
-            {
-                auto f_phi = face_basis.eval_functions(msh, bfc, qp.point());
-
-                for (size_t i = 0; i < f_phi.size(); i++)
-                {
-                    for (size_t j = 0; j < f_phi.size(); j++)
-                        MFF(i,j) += qp.weight() * mm_prod(f_phi[i], f_phi[j]);
-
-                    rhs_f(i) += qp.weight() * mm_prod(f_phi[i], bc(qp.point(), pst));
-                }
-            }
-
-
-            for (size_t i = 0; i < MFF.rows(); i++)
-            {
-                for (size_t j = 0; j < MFF.cols(); j++)
-                {
-                    m_triplets.push_back( triplet_type(face_offset + i, face_offset_lagrange + j, MFF(i,j)) );
-                    m_triplets.push_back( triplet_type(face_offset_lagrange + j, face_offset + i, MFF(i,j)) );
-                }
-                rhs(face_offset_lagrange+i) = rhs_f(i);
-            }
-
-            face_i++;
-        }
-    }
-    void
-    finalize()
-    {
-        matrix.setFromTriplets(m_triplets.begin(), m_triplets.end());
-        m_triplets.clear();
-    }
-};
 
 template< typename T, size_t DIM, typename Storage>
 auto
@@ -474,7 +341,6 @@ public:
         auto num_faces       = fcs.size();
         auto num_cell_dofs   = cell_basis.range(0,m_degree).size();
         auto num_face_dofs   = face_basis.size();
-
         dofspace_ranges dsr(num_cell_dofs, num_face_dofs, num_faces);
 
         rhs  = vector_type::Zero(dsr.total_size());
@@ -501,18 +367,19 @@ public:
             tsr.xi_norm(cont) = xi_norm;
 
             if(xi_norm > m_yield)
+                //if( std::sqrt(0.5) * xi_norm > m_yield)
             {
                 vector_type  gamma;
                 gamma   = m_method_coef * (xi_norm - m_yield)* (xi / xi_norm);
-                rhs    +=   qp.weight() * (siglam  - m_alpha * gamma).transpose() * dphi_rec ;
+                rhs    +=   qp.weight() *  dphi_rec.transpose() * (siglam  - m_alpha * gamma) ;
                 tsr.siglam.col(cont) += m_alpha * ( dphi_rec_uh - gamma );
                 tsr.gamma.col(cont)   = gamma;
             }
             else
             {
-                rhs +=  qp.weight() * siglam * dphi_rec;
+                rhs +=  qp.weight() * dphi_rec.transpose() * siglam;
                 tsr.siglam.col(cont) += m_alpha * dphi_rec_uh;
-                tsr.gamma.col(cont)   = vector_type::Zero(cell_quadpoints.size());
+                tsr.gamma.col(cont)   = vector_type::Zero(mesh_type::dimension);
             }
             ++cont;
         }
@@ -534,12 +401,12 @@ public:
     typedef typename mesh_type::edge_type           edge_type;
     typedef typename mesh_type::cell_iterator       cell_itor;
 
-    std::vector<bool> cl_marks_vector;
+    std::vector<size_t> cl_marks_vector;
 
 
-    stress_based_mesh(const mesh_type& msh,const std::vector<tensors<T>>& tsr_vec,const T yield)
+    stress_based_mesh(const mesh_type& msh,const std::vector<tensors<T>>& tsr_vec, const T yield, bool& do_refinement)
     {
-        std::vector<bool> vec(msh.cells_size(),false);
+        std::vector<size_t> vec(msh.cells_size(),0);
 
         for(size_t i = 0; i < tsr_vec.size();i++)
         {
@@ -547,16 +414,29 @@ public:
             if(std::abs(mat.maxCoeff()) >=  yield)
             {
                 if (std::abs(mat.minCoeff())< yield)
-                    vec.at(i) = true;
+                    vec.at(i) = 1;
             }
         }
 
-         cl_marks_vector = vec;
-    }
+        cl_marks_vector = vec;
+        do_refinement = false;
+        for(size_t i = 0; i < cl_marks_vector.size(); i++)
+        {
+            std::cout<<"cl_marks_vector["<<i<<"]"<<cl_marks_vector[i]<<std::endl;
+            if(cl_marks_vector[i] == 1)
+            {
+                do_refinement = true;
+                break;
+            }
+        }
+        std::cout << do_refinement << std::endl;
 
-    void re_populate_mesh(mesh_type & msh,
+    }
+    void
+    re_populate_mesh(mesh_type & msh,
                             const std::vector<tensors<T>>& tsr_vec,
                             const T yield,
+                            const std::string&  directory,
                             const int degree)
     {
         mesh_type re_msh;
@@ -571,14 +451,13 @@ public:
             size_t id  = msh.lookup(cl);
             auto xi_norms_storage =  tsr_vec[id].xi_norm;
             auto cmkr  = cl_marks_vector.at(id);
-            //WK: This is only for 1D
-            auto lmkr  = (id != 0)?  cl_marks_vector.at(id-1) : false;
-            auto rmkr  = (id != msh.cells_size()-1)?  cl_marks_vector.at(id+1) : false;
+            auto lmkr  = (id != 0)?  cl_marks_vector.at(id-1) : 0;
+            auto rmkr  = (id != msh.cells_size()-1)?  cl_marks_vector.at(id+1) : 0;
 
             auto cell_pts   = points(msh, cl);
             storage_rm->points.push_back(cell_pts.at(0));
 
-            if(cmkr || (lmkr ||rmkr))
+            if(cmkr == 1 || (lmkr == 1 || rmkr == 1))
             {
                 auto new_pt = (cell_pts.at(1) + cell_pts.at(0))/2.;
                 /* Points */
@@ -625,12 +504,13 @@ public:
     typedef typename mesh_type::node_type           node_type;
     typedef typename mesh_type::edge_type           edge_type;
     typedef typename mesh_type::cell                cell_type;
+    typedef typename mesh_type::face                face_type;
     typedef typename mesh_type::cell_iterator       cell_itor;
 
     bool m_hanging_nodes;
     std::vector<size_t> cl_marks_vector;
     //std::vector<std::pair<bool,typename point<T,2>::id_type>> fc_marks_vector;
-    std::vector<std::pair<bool,int>> fc_marks_vector;
+    std::vector<std::pair<bool, int>> fc_marks_vector;
     std::vector<std::array<ident_impl_t, 4>>        m_edges;
     std::vector<std::array<ident_impl_t, 2>>        m_boundary_edges;
 
@@ -638,11 +518,12 @@ public:
     std::vector<std::array<ident_impl_t, 4>>        m_quadrangles;
     std::vector<std::array<ident_impl_t, 5>>        m_pentagons;
     std::vector<std::array<ident_impl_t, 6>>        m_hexagons;
-
+    std::vector<std::array<ident_impl_t, 7>>        m_ennagons;
     stress_based_mesh(const mesh_type& msh,
                         const std::vector<tensors<T>>& tsr_vec,
                         const T yield,
-                        bool hanging_ndoes):m_hanging_nodes(hanging_ndoes)
+                        bool& do_refinement,
+                        const bool hanging_nodes):m_hanging_nodes(hanging_nodes)
     {
         if(m_hanging_nodes)
             cl_marks_vector = cells_marker_with_hanging_nodes(msh,tsr_vec,yield);
@@ -658,6 +539,16 @@ public:
         fc_marks_vector.resize(msh.faces_size());
         for(size_t i = 0; i < fc_marks_vector.size(); i++)
             fc_marks_vector.at(i).first = false;
+
+        do_refinement = false;
+        for(size_t i = 0; i < cl_marks_vector.size(); i++)
+        {
+            if(cl_marks_vector[i] > 0)
+            {
+                do_refinement = true;
+                break;
+            }
+        }
     }
     template< size_t N>
     struct n_gon
@@ -675,11 +566,12 @@ public:
 
         for(size_t i = 0; i < tsr_vec.size();i++)
         {
+            //auto mat = tsr_vec.at(i).siglam;
             auto mat = tsr_vec.at(i).xi_norm;
             if(std::abs(mat.maxCoeff()) >=  yield)
             {
                 if (std::abs(mat.minCoeff()) < yield)
-                    vec.at(i) = 1;
+                    vec.at(i) = 3;
             }
         }
         return vec;
@@ -692,7 +584,7 @@ public:
     {
         std::vector<size_t> vec(msh.cells_size());
 
-        for(size_t i = 0; i < tsr_vec.size();i++)
+        for(size_t i = 0; i < tsr_vec.size(); i++)
         {
             auto mat = tsr_vec.at(i).xi_norm;
             if(std::abs(mat.maxCoeff()) >=  yield)
@@ -730,7 +622,7 @@ public:
          if(t.b[N -1])
              m_boundary_edges.push_back({a , b });
      }
-
+     #if 0
     void
     marker_with_hanging_nodes(mesh_type & msh)
     {
@@ -785,6 +677,52 @@ public:
                 }
             }
         }
+    }
+    #endif
+    void
+    face_mark_hanging_nodes(mesh_type & msh, const face_type & fc)
+    {
+        auto storage = msh.backend_storage();
+        auto  fc_id  = msh.lookup(fc);
+        fc_marks_vector.at(fc_id).first  = true;
+        auto bar = barycenter(msh,fc);
+        storage ->points.push_back(bar);
+        fc_marks_vector.at(fc_id).second = storage->points.size() -1;
+        //std::cout << "inside marker, marking bundary = "<<fc_id << std::endl;
+    }
+
+    void
+    set_marks_hanging_nodes(mesh_type & msh, const cell_type & cl)
+    {
+        auto cl_id   = msh.lookup(cl);
+        auto cl_mark = cl_marks_vector.at(cl_id);
+        if(cl_mark > 1)
+        {
+            auto fcs     = faces(msh,cl);
+            for(auto & fc: fcs)
+            {
+                if(msh.is_boundary(fc))
+                    face_mark_hanging_nodes(msh, fc);
+                else
+                {
+                    auto  fc_id    = msh.lookup(fc);
+                    if(!fc_marks_vector.at(fc_id).first)
+                    {
+                        face_mark_hanging_nodes(msh, fc);
+                        auto  neighbor_id   = face_owner_cells_ids(msh,fc,cl);
+                        auto  ngh_mark      = cl_marks_vector.at(neighbor_id);
+
+                        if(cl_mark > ngh_mark)
+                        {
+                            cl_marks_vector.at(neighbor_id) = cl_mark - 1;
+                            auto  ngh  = *(msh.cells_begin() + size_t(neighbor_id));
+                            set_marks_hanging_nodes(msh, ngh);
+                        }
+                    }
+                }
+            }
+        }
+        return;
     }
 
     void
@@ -856,41 +794,99 @@ public:
         //else
         //    throw std::logic_error("shouldn't have arrived here");
     }
+
     void
     marker(mesh_type& msh)
     {
-        auto cmv_initial = cl_marks_vector;
-        auto storage = msh.backend_storage();
         for(auto& cl : msh)
         {
             auto cl_id   = msh.lookup(cl);
-            bool cl_mark = cmv_initial.at(cl_id);
+            bool cl_mark = cl_marks_vector.at(cl_id);
             if(cl_mark)
-                set_marks(msh, cl);
+            {
+                if(m_hanging_nodes)
+                    set_marks_hanging_nodes(msh, cl);
+                else
+                    set_marks(msh, cl);
+            }
         }
     }
 
-   template<size_t N, typename NGon, typename FaceIds>
-   n_gon<N>
-   n_gon_with_hanging_node(const size_t num_fcs,const FaceIds& fcs_ids,const NGon& t)
-   {
-        n_gon<N> nt;
-
+    template<size_t N, size_t M, typename FaceIds>
+    n_gon<N>
+    n_gon_base(const n_gon<M>& t, const FaceIds& fcs_ids)
+    {
+       n_gon<N> nt;
+       auto num_fcs = fcs_ids.size();
        for(size_t i = 0, j = 0; i < num_fcs; i++, j++)
        {
-           auto fc_mark = fc_marks_vector.at(fcs_ids[i]).first;
-           nt.p[j] = t.p[i];
-           nt.b[j] = t.b[i];
-           if(fc_mark)
-            {
-                j++;
-                nt.p[j] = fc_marks_vector.at(fcs_ids[i]).second;
-                nt.b[j] = t.b[i];
-            }
+          auto fc_mark = fc_marks_vector.at(fcs_ids[i]).first;
+          nt.p[j] = t.p[i];
+          nt.b[j] = t.b[i];
+          if(fc_mark)
+           {
+               j++;
+               nt.p[j] = fc_marks_vector.at(fcs_ids[i]).second;
+               nt.b[j] = t.b[i];
+           }
        }
-       return nt;
+      return nt;
    }
 
+
+   template<size_t N>
+   n_gon<N>
+   put_n_gon_with_hanging_node(mesh_type & msh, const cell_type& cl)
+   {
+
+       auto fcs_ids = cl.faces_ids();
+       auto num_fcs = fcs_ids.size();
+
+        if(num_fcs == 3)
+        {
+           auto t = put_n_gon<3>(msh, cl);
+           return  n_gon_base<N>(t, fcs_ids);
+        }
+        if(num_fcs == 4)
+        {
+            auto t = put_n_gon<4>(msh, cl);
+            return  n_gon_base<N>(t, fcs_ids);
+        }
+
+        if(num_fcs == 5)
+        {
+            auto t = put_n_gon<5>(msh, cl);
+            return  n_gon_base<N, 5>(t, fcs_ids);
+        }
+        if(num_fcs == 6)
+        {
+            auto t = put_n_gon<6>(msh, cl);
+            return  n_gon_base<N, 6>(t, fcs_ids);
+        }
+        if(num_fcs == 7)
+        {
+            auto t = put_n_gon<7>(msh, cl);
+            return  n_gon_base<N, 7>(t, fcs_ids);
+        }
+        throw std::logic_error("This shouldn't come to this point");
+    }
+
+    template<size_t N>
+    n_gon<N>
+    put_n_gon(const mesh_type & msh, const cell_type& cl)
+    {
+       n_gon<N> t;
+       auto storage = msh.backend_storage();
+       auto pts_ids = cl.point_ids();
+       auto fcs_ids = cl.faces_ids();
+       for(size_t i = 0; i < N; i++)
+       {
+           auto id  = fcs_ids.at(i);
+           t.p[i]   = pts_ids.at(i); // Since later in populate_mesh values are subtract  by 1
+           t.b[i]   = storage->boundary_edges.at(id);
+       }
+       return t;
+    }
 
     void refine_single(const mesh_type& msh, const cell_type& cl)
     {
@@ -964,65 +960,147 @@ public:
     }
 
 
-    void refine_single_with_hanging_nodes(const mesh_type& msh, const cell_type& cl)
+    void
+    refine_reference_triangle(const n_gon<3> & t , const std::array<int, 3> & bar_ids)
     {
-            auto storage = msh.backend_storage();
+        n_gon<3> t0,t1,t2,t3;
 
+        auto bar0pos = bar_ids.at(0);
+        auto bar1pos = bar_ids.at(1);
+        auto bar2pos = bar_ids.at(2);
+
+        t0.p[0] = t.p[0];   t0.p[1] = bar0pos;  t0.p[2] = bar2pos;
+        t1.p[0] = bar0pos;  t1.p[1] = t.p[1];   t1.p[2] = bar1pos;
+        t2.p[0] = bar2pos;  t2.p[1] = bar1pos;  t2.p[2] = t.p[2];
+        t3.p[0] = bar0pos;  t3.p[1] = bar1pos;  t3.p[2] = bar2pos;
+
+        t0.b[0] = t.b[0];   t0.b[1] = false;    t0.b[2] = t.b[2];
+        t1.b[0] = t.b[0];   t1.b[1] = t.b[1];   t1.b[2] = false;
+        t2.b[0] = false;    t2.b[1] = t.b[1];   t2.b[2] = t.b[2];
+        t3.b[0] = false;    t3.b[1] = false;    t3.b[2] = false;
+
+        store(t0,m_triangles);
+        store(t1,m_triangles);
+        store(t2,m_triangles);
+        store(t3,m_triangles);
+    }
+    void refine_triangle(mesh_type& msh, const cell_type& cl)
+    {
+        auto fcs_ids = cl.faces_ids();
+        auto bar0pos = fc_marks_vector.at(fcs_ids[0]).second;
+        auto bar1pos = fc_marks_vector.at(fcs_ids[1]).second;
+        auto bar2pos = fc_marks_vector.at(fcs_ids[2]).second;
+        std::array<int, 3> bar_ids = {bar0pos, bar1pos, bar2pos};
+
+        auto t  = put_n_gon<3>(msh, cl);
+
+        refine_reference_triangle( t,  bar_ids);
+    }
+
+    void
+     refine_other(mesh_type& msh, const cell_type& cl)
+     {
+         auto storage  = msh.backend_storage();
+         auto pts      = points(msh,cl);
+         auto pts_ids  = cl.point_ids();
+         auto fcs_ids  = cl.faces_ids();
+         auto num_fcs  = fcs_ids.size();
+         auto fbar_ids = std::vector<size_t>(num_fcs);
+         auto cbar     = barycenter(msh,cl);
+         storage ->points.push_back(cbar);
+         auto cbar_id = storage ->points.size() - 1;
+
+         for (size_t i = 0; i < num_fcs; i++)
+         {
+            auto fbar = ( pts.at(i) + cbar ) / 2.;
+            storage ->points.push_back(fbar);
+            fbar_ids.at(i)  = storage ->points.size() - 1;
+         }
+
+         for(size_t i = 0; i < num_fcs; i++)
+         {
+             n_gon<3>   nt;
+             std::array<int, 3> tbar_ids;
+             nt.p[0] = pts_ids[i];
+             nt.p[1] = pts_ids[(i+1)%num_fcs];
+             nt.p[2] = cbar_id;
+
+             nt.b[0] = storage->boundary_edges.at(fcs_ids.at(i));
+             nt.b[1] = false;
+             nt.b[2] = false;
+
+             tbar_ids.at(0) = fc_marks_vector.at(fcs_ids.at(i)).second;
+             tbar_ids.at(1) = fbar_ids.at((i+1)%num_fcs);
+             tbar_ids.at(2) = fbar_ids.at(i);
+
+             refine_reference_triangle(nt , tbar_ids);
+         }
+     }
+
+    void
+    refine_single_with_hanging_nodes(mesh_type& msh, const cell_type& cl, const size_t cl_mark)
+    {
+        auto fcs_ids = cl.faces_ids();
+        auto num_fcs = fcs_ids.size();
+
+        if( cl_mark > 1)
+        {
+
+            switch (num_fcs)
+            {
+                case 1:
+                case 2:
+                    throw std::logic_error("Number of faces cannot be less than 3");
+                    break;
+                case 3:
+                    refine_triangle(msh, cl);
+                    break;
+                //case 4:
+                //    refine_quadrangle();
+                //    break;
+                default:
+                    refine_other(msh ,cl);
+                    break;
+            }
+        }
+        else
+        {
             auto count   = 0;
-            auto pts_ids = cl.point_ids();
-            auto fcs_ids = cl.faces_ids();
-            auto num_fcs = fcs_ids.size();
-
-            //for triangles
-            n_gon<3> t;
-
             for(size_t i = 0; i < num_fcs; i++)
             {
-
                 auto id  = fcs_ids.at(i);
                 auto fc_mark = fc_marks_vector.at(id).first;
-                t.p[i]   = pts_ids.at(i);
-                t.b[i]   = storage->boundary_edges.at(id);
                 if(fc_mark)
                     count++;
             }
 
-            auto num_split_fcs =  count;
-
-            if( num_split_fcs == 3)
-            {
-                n_gon<3> t0,t1,t2,t3;
-                auto bar0pos = fc_marks_vector.at(fcs_ids[0]).second;
-                auto bar1pos = fc_marks_vector.at(fcs_ids[1]).second;
-                auto bar2pos = fc_marks_vector.at(fcs_ids[2]).second;
-
-                t0.p[0] = t.p[0];   t0.p[1] = bar0pos;  t0.p[2] = bar2pos;
-                t1.p[0] = bar0pos;  t1.p[1] = t.p[1];   t1.p[2] = bar1pos;
-                t2.p[0] = bar2pos;  t2.p[1] = bar1pos;  t2.p[2] = t.p[2];
-                t3.p[0] = bar0pos;  t3.p[1] = bar1pos;  t3.p[2] = bar2pos;
-
-                t0.b[0] = t.b[0];   t0.b[1] = false;    t0.b[2] = t.b[2];
-                t1.b[0] = t.b[0];   t1.b[1] = t.b[1];   t1.b[2] = false;
-                t2.b[0] = false;    t2.b[1] = t.b[1];   t2.b[2] = t.b[2];
-                t3.b[0] = false;    t3.b[1] = false;    t3.b[2] = false;
-
-                store(t0,m_triangles);
-                store(t1,m_triangles);
-                store(t2,m_triangles);
-                store(t3,m_triangles);
-
-            }
+            auto new_num_fcs = count + num_fcs;
             //Esto hay que revisarlo para una segunda adaptacion, puesto que ya hay polygonos
-            if(num_split_fcs == 1)
+            if(new_num_fcs == 4)
             {
-                auto nt = n_gon_with_hanging_node<4>(num_fcs,fcs_ids,t);
+                auto nt = put_n_gon_with_hanging_node<4>(msh, cl);
                 store(nt,m_quadrangles);
             }
-            if(num_split_fcs == 2)
+            if(new_num_fcs == 5)
             {
-                auto nt = n_gon_with_hanging_node<5>(num_fcs,fcs_ids,t);
+                auto nt = put_n_gon_with_hanging_node<5>(msh, cl);
                 store(nt,m_pentagons);
             }
+            if(new_num_fcs == 6)
+            {
+                auto nt = put_n_gon_with_hanging_node<6>(msh, cl);
+                store(nt,m_hexagons);
+            }
+            if(new_num_fcs == 7)
+            {
+                auto nt = put_n_gon_with_hanging_node<7>(msh, cl);
+                store(nt,m_ennagons);
+            }
+            if(new_num_fcs > 7)
+            {
+                throw std::logic_error("number of faces exceeds maximum. Add new array to store it.");
+            }
+        }
     }
 
     void
@@ -1037,10 +1115,11 @@ public:
     void re_populate_mesh( mesh_type & msh,
                             const std::vector<tensors<T>>& tsr_vec,
                             const T yield,
+                            const std::string & directory,
+                            const std::string & other_info,
                             const int degree)
     {
         mesh_type re_msh, re_msh_2;
-
 
         re_msh = msh;
 
@@ -1049,14 +1128,10 @@ public:
         auto num_cells  = msh.cells_size();
         size_t nds_counter = 0;
 
-        if(m_hanging_nodes)
-            marker_with_hanging_nodes(re_msh);
-        else
-            marker(re_msh);
+        marker(re_msh);
+        dump_to_matlab(msh, directory + "/mesh" + other_info + ".m",cl_marks_vector);
 
-        dump_to_matlab(msh,"mesh.m",cl_marks_vector);
-
-        for(auto& cl:msh)
+        for(auto& cl : msh)
         {
             auto cl_id   = msh.lookup(cl);
             auto cl_mark = cl_marks_vector.at(cl_id);
@@ -1064,24 +1139,35 @@ public:
             if(cl_mark > 0)
             {
                 if(m_hanging_nodes)
-                    refine_single_with_hanging_nodes(msh,cl);
+                    refine_single_with_hanging_nodes(msh, cl, cl_mark);
                 else
                     refine_single(msh,cl);
             }
             else
             {
-                auto pts_ids = cl.point_ids();
-                auto fcs_ids = cl.faces_ids();
-                auto num_fcs = fcs_ids.size();
-                n_gon<3> t;
-                for(size_t i = 0; i < num_fcs; i++)
+                auto fcs_ids  =  faces(msh,cl); //WK: There should be direct way to know the number of faces of the cell
+                int  num_fcs  =  fcs_ids.size();
+                switch(num_fcs)
                 {
-                    auto pts_ids = cl.point_ids();
-                    auto id  = fcs_ids.at(i);
-                    t.p[i]   = pts_ids.at(i); // Since later in populate_mesh values are subtract  by 1
-                    t.b[i]   = storage->boundary_edges.at(id);
+                    case 3:
+                        store(put_n_gon<3>(msh,cl), m_triangles);
+                        break;
+                    case 4:
+                        store(put_n_gon<4>(msh,cl), m_quadrangles);
+                        break;
+                    case 5:
+                        store(put_n_gon<5>(msh,cl), m_pentagons);
+                        break;
+                    case 6:
+                        store(put_n_gon<6>(msh,cl), m_hexagons);
+                        break;
+                    case 7:
+                        store(put_n_gon<7>(msh,cl), m_ennagons);
+                        break;
+                    default:
+                        throw std::logic_error("Polygon not stored, number of faces exceeds maximum. Add an array to store it");
+                        break;
                 }
-                store(t,m_triangles);
             }
             //else
         }
@@ -1108,6 +1194,169 @@ public:
 
     }
 
+};
+
+template<typename T, size_t DIM>
+struct solution
+{
+    typedef point<T, DIM>               point_type;
+    typedef Eigen::Matrix< T, DIM, 1>   gradient_vector;
+
+    typedef std::function<T (const point_type & p)>    function;
+    typedef std::function<gradient_vector(const point_type & p)>   dfunction;
+};
+
+template<typename T, size_t DIM>
+struct poiseuille;
+
+template<typename T>
+struct poiseuille<T,1>: public solution<T,1>
+{
+    typedef typename solution<T,1>::function     function;
+    typedef typename solution<T,1>::dfunction    dfunction;
+    typedef typename solution<T,1>::point_type   point_type;
+    typedef typename solution<T,1>::gradient_vector gradient_vector;
+
+    function f,sf;
+    dfunction df;
+    std::string     name;
+
+    poiseuille(plasticity_data<T>& pst)
+    {
+        name = "pouseille";
+        T fvalue(1.);
+        pst.f = fvalue;
+
+        f  =  [fvalue](const point_type& p) -> T {
+            T ret = fvalue;
+            return ret;
+         };
+        sf =  [pst](const point_type& p)-> T
+        {
+            T  ret, xO(0.), xL(pst.Lref);
+            T  xc = pst.Lref/2.0 - pst.Bn*pst.Lref*pst.f;
+
+            if( p.x() >= xO & p.x() <=  xc)
+                ret = (xc*xc - (p.x() - xc)*(p.x() - xc));
+            if( p.x() > xc & p.x() <  (xL- xc))
+                ret = xc*xc;
+            if( p.x() <= xL & p.x() >= (xL - xc))
+                ret = (xc*xc - (p.x() - (pst.Lref - xc))*(p.x() - (pst.Lref -xc)));
+            return ret*(0.5 * pst.f / pst.mu);
+        };
+
+        df =  [pst](const point_type& p)-> gradient_vector
+        {
+            gradient_vector ret   = gradient_vector::Zero();
+            T  xO(0.);
+            T  xL(pst.Lref);
+            T  xc = pst.Lref / 2.0  -  pst.Bn * pst.Lref * pst.f;
+
+            if( p.x() >= xO & p.x() <=  xc)
+                ret(0) = - 2.*(p.x() - xc);
+            if( p.x() > xc & p.x() <  (xL- xc))
+                ret(0) = 0.;
+            if( p.x() <= xL & p.x() >= (xL - xc))
+                ret(0) = - 2.*(p.x() - (pst.Lref - xc));
+            ret = (0.5*pst.f/pst.mu)*ret;
+            return ret;
+        };
+    };
+};
+template<typename T, size_t DIM>
+struct tuyau;
+
+template<typename T>
+struct tuyau<T,2>: public solution<T,2>
+{
+    typedef typename solution<T,2>::function        function;
+    typedef typename solution<T,2>::dfunction       dfunction;
+    typedef typename solution<T,2>::point_type      point_type;
+    typedef typename solution<T,2>::gradient_vector gradient_vector;
+
+    function        f,sf;
+    dfunction       df;
+    std::string     name;
+
+    tuyau(plasticity_data<T>& pst)
+    {
+        name = "square";
+
+        pst.f = 1.;
+
+        f  = [](const point_type& p) -> T {
+            T ret = 1.;
+            return ret;
+        };
+
+        sf = [](const point_type& p) -> T {
+            T ret = 0.;
+            return ret;
+        };
+        df = [](const point_type& p) -> gradient_vector {
+            return gradient_vector::Zero();
+        };
+    };
+};
+
+template<typename T, size_t DIM>
+struct circular_tuyau;
+
+template<typename T>
+struct circular_tuyau<T,2>: public solution<T,2>
+{
+    typedef typename solution<T,2>::function        function;
+    typedef typename solution<T,2>::dfunction       dfunction;
+    typedef typename solution<T,2>::point_type      point_type;
+    typedef typename solution<T,2>::gradient_vector gradient_vector;
+
+    function        f,sf;
+    dfunction       df;
+    std::string     name;
+    circular_tuyau(plasticity_data<T>& pst)
+    {
+        name = "circular";
+        pst.f = 1.;
+        T   R = 1.; // this should be read from the mesh
+
+        f  = [pst](const point_type& p) -> T {
+            T ret = 1.;
+            return ret;
+        };
+        sf = [R,pst](const point_type& p) -> T {
+
+            T  ret = 0;
+            T    r = std::sqrt(p.x()*p.x() + p.y()*p.y());
+            T   Bi = 2.*pst.yield/(pst.f*R);
+
+            if(r/R >= Bi)
+                0.5*(1. - (r/R)*(r/R)) - Bi*(1. - r/R);
+            else
+                0.5*(1. - Bi)*(1. - Bi);
+
+            ret = (0.5*pst.f*R*R/pst.mu)*ret;
+            return ret;
+        };
+        df = [R,pst](const point_type& p) -> gradient_vector {
+
+            gradient_vector ret   = gradient_vector::Zero();
+
+            T    r = std::sqrt(p.x()*p.x() + p.y()*p.y());
+            T   Bi = 2.*pst.yield/(pst.f*R);
+
+            if(r/R >= Bi)
+            {
+                T dfdr =  - r/(R*R) + Bi/R;
+                T drdx =  p.x()/r;
+                T drdy =  p.y()/r;
+                ret(0) = dfdr*drdx;
+                ret(1) = dfdr*drdy;
+            }
+
+            ret = (0.5*pst.f*R*R/pst.mu)*ret;
+            return ret;
+        };
+    };
 };
 
 
