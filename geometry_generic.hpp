@@ -90,6 +90,7 @@ std::vector<typename generic_mesh<T, DIM>::cell::id_type>
 face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
                         const typename generic_mesh<T, DIM>::face& fc)
 {
+    #if 0
     std::vector<typename generic_mesh<T, DIM>::cell::id_type> ret;
     /* Search the face in the other cells*/
     for(auto& cl:msh)
@@ -108,15 +109,37 @@ face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
     // WK:This should be redefine as a pair, instead of a vector, so it will always have just 2 owners
     // and I dont need to check the size
     return ret;
+    #endif
+
+    std::vector<typename generic_mesh<T, DIM>::cell::id_type> ret;
+    for(auto& cl:msh)
+    {
+        auto fcs  = faces(msh,cl);
+        std::sort(fcs.begin(), fcs.end());
+        auto itor = std::lower_bound(fcs.begin(), fcs.end(), fc);
+
+        if (itor != fcs.end() && !(fc < *itor))
+        {
+            auto cl_id = msh.lookup(cl);
+            ret.push_back(cl_id);
+        }
+    }
+    if(ret.size() > 2)
+        throw std::logic_error(" Finding more than 2 cell for the face");
+    else if(ret.size() == 0)
+        throw std::logic_error(" No owners found for the face");
+    else
+        return ret;
 }
+
 
 template<typename T, size_t DIM>
 typename generic_mesh<T, DIM>::cell::id_type
 face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
-                        const typename generic_mesh<T, DIM>::face& fc,
+                        const typename generic_mesh<T, DIM>::face& face,
                         const typename generic_mesh<T, DIM>::cell& cell)
 {
-
+    #if 0
     typedef typename generic_mesh<T, DIM>::cell::id_type cell_id_type;
     cell_id_type ret;
     /* Search the face in the other cells*/
@@ -129,14 +152,76 @@ face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
         if(std::binary_search(fcs.begin(),fcs.end(),fc))
         {
             cell_id_type cl_id = msh.lookup(cl);
+
+            std::cout << "  inside  cl_id "<< cl_id << std::endl;
+
             if(!(cl_id == cell_id))
             {
                 ret = cl_id;
+                std::cout << "  inside  ngh_id "<< cl_id << std::endl;
                 break;
             }
         }
     }
-    return ret;
+    #endif
+    if(msh.is_boundary(face))
+    {
+        throw std::logic_error("Do not call face_owner_cells_ids(msh, fc, cl) for boundaray edges; since it gives the neighbor of cl for this face.");
+    }
+    else
+    {
+        auto cell_id = msh.lookup(cell);
+
+        for(auto& cl : msh)
+        {
+            auto fcs   = faces(msh,cl);
+            std::sort(fcs.begin(), fcs.end());
+            auto itor  = std::lower_bound(fcs.begin(), fcs.end(), face);
+            auto neighbor_id = msh.lookup(cl);
+
+            if( itor != fcs.end() && !(face < *itor) && (neighbor_id != cell_id))
+                return neighbor_id;
+        }
+        throw std::logic_error(" Not neighbor found");
+    }
+}
+
+
+
+template<typename T, size_t DIM>
+void
+borrar(const generic_mesh<T, DIM>& msh)
+{
+    //typename generic_mesh<T, DIM>::cell::id_type
+    for(auto itor = msh.faces_begin(); itor != msh.faces_end(); itor++)
+    {
+        auto fc = *itor;
+        std::cout << "fc_id  : "<< msh.lookup(fc)<< "      ; owner_cells:";
+
+        for(auto& cl:msh)
+        {
+            auto fcs  = faces(msh,cl);
+            std::sort(fcs.begin(), fcs.end());
+            auto itor = std::lower_bound(fcs.begin(), fcs.end(), fc);
+
+            if (itor != fcs.end() && !(fc < *itor))
+            {
+                std::cout << "     "<< msh.lookup(cl);
+            }
+        }
+        std::cout<< std::endl;
+    }
+
+    for(auto& cl : msh)
+    {
+        std::cout << "cell : "<< msh.lookup(cl)<< "      ; faces :";
+        auto fcs  = faces(msh,cl);
+
+        for(auto& fc : fcs)
+            std::cout <<"     "<< msh.lookup(fc);
+        std::cout<< std::endl;
+    }
+    std::cout<< std::endl;
 }
 
 
