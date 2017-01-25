@@ -447,11 +447,9 @@ public:
 
         size_t cl_cont = 0;
         size_t fc_cont = 0;
-
-        char numstr[4];
         std::string result;
-        sprintf(numstr, "%i",iter);
-        std::string file_name = name + numstr;
+        //std::string file_name = name + "_i" + numstr;
+        std::string file_name = name;
 
         for(auto& cel : msh)
         {
@@ -562,7 +560,7 @@ public:
     }
 
     template<typename TensorMatrix>
-    void tensor_norm_vtk_writer(const mesh_type& msh, const std::string& name, const size_t degree,
+    void tensor_norm_vtk_writer(const mesh_type& msh, const std::string& name, const size_t quad_degree,
                const std::vector<TensorMatrix> & tensor, const int iter)   /* storage of velocities*/
     {
 
@@ -572,33 +570,35 @@ public:
         typedef scaled_monomial_scalar_basis<mesh_type, cell_type>    cell_basis_type;
         typedef scaled_monomial_scalar_basis<mesh_type, face_type>    face_basis_type;
 
-        cell_quadrature_type    cq(2*degree+2);
+        cell_quadrature_type    cq(quad_degree);
         std::stringstream       vtk_points, vtk_elems, vtk_data_x, vtk_data_y, vtk_data_norm;
 
         size_t cl_cont = 0;
-        size_t total_num_qp  = 0;
-        char numstr[4];
+        size_t total_num_pts  = 0;
         std::string result;
-        sprintf(numstr, "%i",iter);
-        std::string file_name = name + numstr;
+        //std::string file_name = name + "_i" + numstr;
+        std::string file_name = name ;
 
         for(auto& cel : msh)
         {
             size_t qp_cont = 0;
             auto cell_id   = msh.lookup(cel);
             auto cell_quadpoints     =  cq.integrate(msh, cel);
+            auto cqs  = cell_quadpoints.size();
+            auto pts  = points(msh,cel);
+            auto ps   = pts.size();
             auto local_tensor_storage =  tensor[cell_id];
 
-            total_num_qp += cell_quadpoints.size();
+            total_num_pts += cqs + ps;
 
             for (auto& qp : cell_quadpoints)
             {
                 auto tp  = qp.point();
 
                 for (size_t d = 0; d < DIM; d++)
-                        vtk_points << tp[d] << " ";
+                    vtk_points << tp[d] << " ";
                 for (size_t d = 0; d < 3 - DIM; d++) /* VTK only supports until 3D */
-                        vtk_points<< 0. << " ";
+                    vtk_points<< 0. << " ";
                 vtk_points<< '\n';
 
                 vector_type pot = local_tensor_storage.col(qp_cont);
@@ -608,12 +608,28 @@ public:
                     vtk_data_norm << pot.norm() << " ";
                 ++qp_cont;
             }
+            for (size_t i = 0, j = cqs; i < ps; i++, j++)
+            {
+                auto tp = pts.at(i);
+                for (size_t d = 0; d < DIM; d++)
+                    vtk_points << tp[d] << " ";
+                for (size_t d = 0; d < 3 - DIM; d++) /* VTK only supports until 3D */
+                    vtk_points<< 0. << " ";
+                vtk_points<< '\n';
+
+                vector_type pot = local_tensor_storage.col(j);
+                if( DIM == 1)
+                    vtk_data_norm << pot << " ";
+                if (DIM == 2)
+                    vtk_data_norm << pot.norm() << " ";
+            }
+
             ++cl_cont;
         }
 
         size_t el = 0;
 
-        for (size_t i = 0; i < total_num_qp; i++)
+        for (size_t i = 0; i < total_num_pts; i++)
             vtk_elems << 1 <<" "<< i <<  '\n';
 
         /*VTK file*/
@@ -628,23 +644,23 @@ public:
             << '\n';
 
         /* Points */
-        ofs << "POINTS " << total_num_qp <<" double"<<'\n'
+        ofs << "POINTS " << total_num_pts <<" double"<<'\n'
             << vtk_points.str()
             << '\n';
 
         /* Cells */
-        ofs << "CELLS " << total_num_qp <<' '<<  total_num_qp *(1 + 1)<< '\n'
+        ofs << "CELLS " << total_num_pts <<' '<<  total_num_pts *(1 + 1)<< '\n'
             << vtk_elems.str()
             << '\n';
 
         /* Types of cells*/
-        ofs << "CELL_TYPES " << total_num_qp << '\n';
-            for(size_t i = 0; i < total_num_qp; i++)
+        ofs << "CELL_TYPES " << total_num_pts << '\n';
+            for(size_t i = 0; i < total_num_pts; i++)
                 ofs << " " << 1;
         ofs << '\n';
 
         /* Data */
-        ofs << "POINT_DATA " << total_num_qp
+        ofs << "POINT_DATA " << total_num_pts
             << '\n';
 
         ofs << "SCALARS "
@@ -658,6 +674,93 @@ public:
 
         ofs.close();
     }
+    template<typename TensorMatrix>
+    void
+    gauss_points_to_matlab(const mesh_type& msh, const std::string& name, const size_t quad_degree,
+               const std::vector<TensorMatrix> & tensor, const int iter, const std::string& other_info)   /* storage of velocities*/
+    {
+
+        typedef quadrature<mesh_type, cell_type>     cell_quadrature_type;
+        cell_quadrature_type    cq(quad_degree);
+        std::stringstream       vtk_points, vtk_elems, vtk_data_x, vtk_data_y, vtk_data_norm;
+
+        std::ofstream cofs(name);
+        size_t i = 0;
+        if (!cofs.is_open())
+            std::cout << "Error opening file"<<std::endl;
+
+        cofs<< "v = cell("<< msh.cells_size()<<", 1);"<< std::endl;
+        for(auto& cel : msh)
+        {
+            size_t qp_cont = 0;
+            auto cell_id   = msh.lookup(cel);
+            auto cell_quadpoints     =  cq.integrate(msh, cel);
+            auto cqs  = cell_quadpoints.size();
+            auto pts  = points(msh,cel);
+            auto ps   = pts.size();
+            auto tsr =  tensor[cell_id];
+
+            auto total_num_pts = cqs + ps;
+
+            cofs<<" A = [";
+            for (auto& qp : cell_quadpoints)
+            {
+                auto tp  = qp.point();
+                vector_type pot = tsr.col(qp_cont);
+                if( DIM == 1)
+                {
+                    for (size_t d = 0; d < DIM; d++)
+                        cofs << tp[d] << " ";
+                    cofs << pot <<std::endl;
+                }
+                if (DIM == 2)
+                {
+                    for (size_t d = 0; d < DIM; d++)
+                        cofs << tp[d] << " ";
+                    cofs << pot.norm() << std::endl;
+                }
+                ++qp_cont;
+            }
+            for (size_t i = 0, j = cqs; i < ps; i++, j++)
+            {
+                auto tp = pts.at(i);
+                for (size_t d = 0; d < DIM; d++)
+                    vtk_points << tp[d] << " ";
+                vector_type pot = tsr.col(j);
+                if( DIM == 1)
+                {
+                    for (size_t d = 0; d < DIM; d++)
+                        cofs << tp[d] << " ";
+                    cofs << pot <<std::endl;
+                }
+                if (DIM == 2)
+                {
+                    for (size_t d = 0; d < DIM; d++)
+                        cofs << tp[d] << " ";
+                    cofs << pot.norm() << std::endl;
+                }
+            }
+            cofs<< " ];"<<std::endl;
+            cofs<< " V{"<<cell_id + 1 <<",1} = A;"<<std::endl;
+
+        }
+
+        cofs<< "X = ["<<std::endl;
+        for (auto cl : msh)
+        {
+            auto bar = barycenter(msh,cl);
+            cofs<< i+1 << " " << bar.x()<< " "<< bar.y()<<std::endl;
+            i++;
+        }
+        cofs<< " ];"<<std::endl;
+        cofs<< "info = 'mesh"<< other_info<<"'"<<std::endl;
+        cofs<< "mesh" << other_info<<std::endl;
+        cofs<< "strValues = strtrim(cellstr(num2str([X(:,1)],'(%d)')));"<<std::endl;
+        cofs<< "text(X(:,2),X(:,3),strValues,'VerticalAlignment','bottom');"<<std::endl;
+        cofs<< "hold on; plot(X(:,2),X(:,3),'o')"<< std::endl;
+        cofs.close();
+    }
+
 };
 template<typename T>
 struct errors
@@ -1165,6 +1268,7 @@ plasticity_post_processing( mesh<T,DIM,Storage>&  msh,
     typedef dynamic_matrix<scalar_type>                 matrix_type;
 
     errors<scalar_type> er;
+    #if 0
     for (auto& cl : msh)
     {
         auto id =   msh.lookup(cl);
@@ -1184,18 +1288,21 @@ plasticity_post_processing( mesh<T,DIM,Storage>&  msh,
     std::cout  << "l2-norm error,  Iu_uh:" << er.Iu_uh  << std::endl;
     std::cout  << "l2-norm error, Du_Guh:" << er.Du_Guh << std::endl;
     efs<<  er.u_uh  <<" "<< er.Iu_uh << " " << er.Du_Guh ;
-
+    #endif
 
     post_processing<T,DIM,Storage> pp;
 
     auto Bi_str     =   to_string(int(10 * pst.Bn));
-    auto diam_str   =   to_string(diam);
     auto n_str      =   to_string(n);
     auto method_str =   (pst.method)? to_string(1): to_string(2);
     auto hanging_str =  (hanging_on)? to_string(1): to_string(0);
-    auto alpha_str  =   to_string(pst.alpha);
-    auto other_info =  "_Bi" + Bi_str + "_n" + n_str+ "_g"+ hanging_str + "_rm" + msh_str
+    auto alpha_str  =   to_string(int(pst.alpha));
+    std::cout << "!!!!!!!! alpha_str = "<< alpha_str<<"   ; alpha = "<< pst.alpha <<std::endl;
+    auto info =  "_n" + n_str+ "_g"+ hanging_str + "_rm" + msh_str
                                  + "_m" + method_str + "_a" + alpha_str;
+    auto other_info =  "_Bi" + Bi_str + info;
+
+    std::cout << "other_info = "<< other_info << std::endl;
     std::string constraint_file;
     if (pst.method == true)
         constraint_file = directory + "/lambda" + other_info;
@@ -1206,6 +1313,7 @@ plasticity_post_processing( mesh<T,DIM,Storage>&  msh,
     std::string gamma_file     = directory + "/gamma" + other_info;
     std::string xi_norm_file   = directory + "/xi_norm" + other_info;
     std::string xi_funct_file  = directory + "/xi_function" + other_info;
+    std::string gauss_pts_file = directory + "/cell_gp" + other_info;
 
     pp.paraview(msh, solution_file, degree, Uh_Th, iter);
 
@@ -1214,6 +1322,9 @@ plasticity_post_processing( mesh<T,DIM,Storage>&  msh,
 
     typedef Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>     tensor_matrix;
     tensor_matrix vec;
+
+    //WK: for p-adaptation quad_degree is not the same for all cells
+    size_t quad_degree = tsr_vec.at(0).quad_degree;
 
     for(auto& cl:msh)
     {
@@ -1231,11 +1342,11 @@ plasticity_post_processing( mesh<T,DIM,Storage>&  msh,
         }
         xi_function.at(id) = vec;
     }
-    pp.tensor_norm_vtk_writer(msh, constraint_file, degree, siglam_Th, iter);
-    pp.tensor_norm_vtk_writer(msh, gamma_file,      degree, gamma_Th, iter);
-    pp.tensor_norm_vtk_writer(msh, xi_norm_file,    degree, xi_norm_Th, iter);
-    pp.tensor_norm_vtk_writer(msh, xi_funct_file,   degree, xi_function, iter);
-
+    pp.tensor_norm_vtk_writer(msh, constraint_file, quad_degree, siglam_Th, iter);
+    pp.tensor_norm_vtk_writer(msh, gamma_file,      quad_degree, gamma_Th, iter);
+    pp.tensor_norm_vtk_writer(msh, xi_norm_file,    quad_degree, xi_norm_Th, iter);
+    pp.tensor_norm_vtk_writer(msh, xi_funct_file,   quad_degree, xi_function, iter);
+    pp.gauss_points_to_matlab(msh, gauss_pts_file + ".m",   quad_degree, xi_function, iter, info);
     return er;
 };
 
