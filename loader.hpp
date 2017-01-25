@@ -150,7 +150,7 @@ template<typename T>
 class fvca5_mesh_loader<T,2> : public mesh_loader<generic_mesh<T, 2>>
 {
     //const char* keywords[] = {"triangles", "quadrangles", "pentagons", "hexagons",
-    //                     "ennagons", "ettagons", "nonecagons" };
+    //                     "heptagons", "octagons", "enneagons" };
 
     typedef generic_mesh<T,2>                       mesh_type;
     typedef typename mesh_type::point_type          point_type;
@@ -165,7 +165,12 @@ public:
     std::vector<polygon<4>>                         m_quadrangles;
     std::vector<polygon<5>>                         m_pentagons;
     std::vector<polygon<6>>                         m_hexagons;
-    std::vector<polygon<7>>                         m_ennagons;
+    std::vector<polygon<7>>                         m_heptagons;
+    std::vector<polygon<8>>                         m_octagons;
+    std::vector<polygon<9>>                         m_enneagons;
+    std::vector<polygon<10>>                        m_decagons;
+    std::vector<polygon<11>>                        m_hendecagons;
+    std::vector<polygon<12>>                        m_dodecagons;
 
     std::vector<std::array<ident_impl_t, 2>>        m_boundary_edges;
     std::vector<std::array<ident_impl_t, 4>>        m_edges;
@@ -266,10 +271,10 @@ private:
             ifs >> keyword;
         }
 
-        if ( keyword == "ennagons" )
+        if ( keyword == "heptagons" )
         {
-            m_ennagons.clear();
-            fvca5_read_tuples(ifs, m_ennagons);
+            m_heptagons.clear();
+            fvca5_read_tuples(ifs, m_heptagons);
             ifs >> keyword;
         }
 
@@ -456,8 +461,13 @@ public:
         surfaces.reserve( m_triangles.size() +
                           m_quadrangles.size() +
                           m_pentagons.size() +
-                          m_hexagons.size() +
-                          m_ennagons.size() );
+                          m_hexagons.size()  +
+                          m_heptagons.size() +
+                          m_octagons.size()  +
+                          m_enneagons.size() +
+                          m_decagons.size()  +
+                          m_hendecagons.size() +
+                          m_dodecagons.size());
 
         //std::cout << "/* message Put Polygons*/" << std::endl;
         //std::cout << "/* triangles */" << std::endl;
@@ -474,8 +484,23 @@ public:
         put_polygons(msh, m_hexagons, surfaces);
         m_hexagons.clear();
 
-        put_polygons(msh, m_ennagons, surfaces);
-        m_ennagons.clear();
+        put_polygons(msh, m_heptagons, surfaces);
+        m_heptagons.clear();
+
+        put_polygons(msh, m_octagons, surfaces);
+        m_octagons.clear();
+
+        put_polygons(msh, m_enneagons, surfaces);
+        m_enneagons.clear();
+
+        put_polygons(msh, m_decagons, surfaces);
+        m_decagons.clear();
+
+        put_polygons(msh, m_hendecagons, surfaces);
+        m_hendecagons.clear();
+
+        put_polygons(msh, m_dodecagons, surfaces);
+        m_dodecagons.clear();
 
         std::sort(surfaces.begin(), surfaces.end());
 
