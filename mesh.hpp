@@ -580,7 +580,6 @@ dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename, cons
         std::cout << "Error opening file"<<std::endl;
     for (auto cl : msh)
     {
-
         auto fcs = faces(msh, cl);
         for (auto fc : fcs)
         {
@@ -588,7 +587,7 @@ dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename, cons
             if ( msh.is_boundary(fc) )
             {
                 ofs << "line([" << pts[0].x() << " " << pts[1].x() << "], [";
-                ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'r');";
+                ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'b');";
                 ofs << std::endl;
             }
             else
@@ -606,7 +605,7 @@ dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename, cons
                 if(mark == 2)
                     ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'g');";
                 if(mark == 1)
-                    ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'b');";
+                    ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'c');";
                 if(mark == 0)
                     ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'k');";
                 ofs << std::endl;
