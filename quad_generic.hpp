@@ -101,8 +101,59 @@ private:
 
         return ret;
     }
+    template<typename PtA>
+    std::vector<quadpoint_type>
+    integrate_quad_symmetric(const mesh_type& msh, const cell_type& cl,
+                       const PtA& pts) const
+    {
+        std::vector<std::pair<point<T,1>, T>> m_quadrature_data_sqr;
+        m_quadrature_data_sqr = edge_quadrature<T>(m_order);
 
+        auto meas       = measure(msh, cl);
 
+        assert(pts.size() == 4);
+
+        size_t qd_size = m_quadrature_data_sqr.size();
+        //std::cout << "qd_size = "<< qd_size << std::endl;
+        //std::cout << "measure = "<< meas << std::endl;
+        std::vector<std::pair<point<T,2>, T>> qd;
+        qd.reserve(qd_size * qd_size);
+
+        for (size_t i = 0; i < qd_size; i++)
+        {
+            auto px = m_quadrature_data_sqr[i].first;
+            auto wx = m_quadrature_data_sqr[i].second;
+
+            for (size_t j = 0; j < qd_size; j++)
+            {
+                auto py = m_quadrature_data_sqr[j].first;
+                auto wy = m_quadrature_data_sqr[j].second;
+
+                auto pt = point<T,2>({px[0], py[0]});
+                auto wt = wx * wy;
+
+                qd.push_back( std::make_pair(pt, wt) );
+            }
+        }
+
+        auto tr = [&](const std::pair<point<T,2>, T>& qd) -> auto {
+
+            auto xi  = qd.first.x();
+            auto eta = qd.first.y();
+
+            auto point =(pts[0]*( 1. - xi) * (1. - eta) +
+                         pts[3]*( 1. - xi) * eta  +
+                         pts[1]* xi  * (1. - eta) +
+                         pts[2]* xi  *  eta );
+
+            auto weight = qd.second * meas;
+            return make_qp(point, weight);
+        };
+        std::vector<quadpoint_type> ret;
+        ret.resize(qd_size * qd_size);
+        std::transform(qd.begin(), qd.end(), ret.begin(), tr);
+        return ret;
+    }
 //#define OPTIMAL_TRIANGLE_NUMBER
 
     /* The 'optimal triangle number' version gives almost the same results
@@ -188,6 +239,67 @@ private:
         return ret;
     }
 #endif
+    template<typename N>
+    void
+    sort_uniq(std::vector<N>& v)
+    {
+        std::sort(v.begin(), v.end());
+        auto uniq_iter = std::unique(v.begin(), v.end());
+        v.erase(uniq_iter, v.end());
+    }
+    template<typename PtA>
+    std::pair<bool,std::vector<point<T,2>>>
+    is_special_polygon(const mesh_type& msh, const cell_type& cl,
+                     const PtA& pts)
+    {
+         auto fcs = faces(msh, cl);
+         std::vector<std::array<T,2>> ns(fcs.size());
+         size_t i = 0;
+         for(auto& fc : fcs)
+         {
+             auto n = normal(msh,cl,fc);
+             ns.at(i)[0] = n(0);
+             ns.at(i)[1] = n(1);
+             i++;
+         }
+        std::sort(ns.begin(), ns.end());
+        auto uniq_iter = std::unique(ns.begin(), ns.end(),[](std::array<T,2>& l, std::array<T,2>& r)
+            {return std::sqrt(std::pow((l[0] - r[0]),2.) + std::pow((l[1] - r[1]),2.)) < 1.e-10; });
+        ns.erase(uniq_iter, ns.end());
+
+         //Identify vertices
+         std::vector<point<T,2>> vertices(ns.size());
+         auto num_pts = pts.size();
+         size_t vcount = 0;
+
+         for(size_t i = 0; i < num_pts; i++)
+         {
+             size_t idx = (i == 0)? num_pts - 1 : i - 1 ;
+             auto pb = pts.at(idx);
+             auto p  = pts.at(i);
+             auto pf = pts.at((i + 1) % num_pts);
+
+             auto u  = (pb - p).to_vector();
+             auto v  = (pf - p).to_vector();
+             auto uxv_norm = cross(u, v).norm();
+
+             if(uxv_norm > 1.e-10)
+             {
+                 vertices.at(vcount) = p;
+                 vcount++;
+             }
+         }
+        if(vcount != ns.size())
+             std::logic_error(" Incorrect procedure to find vertices");
+
+        bool has_hang_nodes(false);
+        if(vertices.size() != pts.size())
+            has_hang_nodes = true;
+
+        auto ret = std::make_pair(has_hang_nodes, vertices);
+
+        return ret;
+    }
 
 public:
     quadrature()
@@ -205,18 +317,38 @@ public:
     std::vector<quadpoint_type>
     integrate(const mesh_type& msh, const cell_type& cl) const
     {
-        auto pts        = points(msh, cl);
+        auto pts      = points(msh, cl);
+        std::vector<point<T,2>> vertices;
 
-        switch(pts.size())
+        /*WK:  This is ok if there are hanging nodes, otherwise it would be
+                unnecessary and costly. One alternative is to bring the variable
+                "hanging nodes" and do:
+
+                if (num_pts > 3 & hanging_nodes)
+                    vertices   = verify_polygon(msh, cl, pts);
+                else
+                    vertices   = pts;
+        */
+
+        if(pts.size() > 3) // &  hanging nodes)
+        {
+            auto pair = is_special_polygon(msh, cl, pts);
+            if(pair.first)
+                vertices = pair.second;
+        }
+        else
+            vertices = pts;
+
+        switch(vertices.size())
         {
             case 3:
-                return integrate_triangle(msh, cl, pts);
+                return integrate_triangle(msh, cl, vertices);
 
             case 4:
-                return integrate_quad(msh, cl, pts);
+                return integrate_quad_symmetric(msh, cl, vertices);
 
             default:
-                return integrate_other(msh, cl, pts);
+                return integrate_other(msh, cl, vertices);
         }
 
         throw std::logic_error("Shouldn't have arrived here");
