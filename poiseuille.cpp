@@ -41,12 +41,14 @@ bool test_diffusion (MeshType & msh,   /* handle to the mesh */
            const disk::plasticity_data<T>&  pst,        /* Material and ALG parameters */
            std::vector<dynamic_vector<T>>&  Uh_Th,      /* storage of velocities*/
            std::vector<TensorsType>      &  tsr_vec,    /* storage of tensors in each cell and in each quad point*/
-           const std::string & directory,
-           std::ofstream     & ifs,
+           const std::string             & directory,
            const size_t degree,                         /* degree of the method */
            T & ALG_error,
+           T & old_dof_error,
            int iter,
-            std::ofstream & tfs)
+           int max_iters,
+           std::ofstream     & ifs,
+           std::ofstream     & tfs)
 {
     typedef MeshType mesh_type;
     typedef typename mesh_type::scalar_type            scalar_type;
@@ -62,11 +64,14 @@ bool test_diffusion (MeshType & msh,   /* handle to the mesh */
     typedef dynamic_vector<scalar_type>                 vector_type;
     typedef dynamic_matrix<scalar_type>                 matrix_type;
 
+    //WK: for p-adaptation quad_degree is not the same for all cells
+    size_t quad_degree = tsr_vec.at(0).quad_degree;
+
     disk::gradient_reconstruction_nopre<mesh_type,
                                         cell_basis_type,
                                         cell_quadrature_type,
                                         face_basis_type,
-                                        face_quadrature_type> gradrec_nopre(degree);
+                                        face_quadrature_type> gradrec_nopre(degree, quad_degree);
 
     disk::diffusion_like_stabilization_nopre<mesh_type,
                                              cell_basis_type,
@@ -108,11 +113,11 @@ bool test_diffusion (MeshType & msh,   /* handle to the mesh */
     {
         gradrec_nopre.compute(msh, cl);
         stab_nopre.compute(msh, cl, gradrec_nopre.oper);
-        matrix_type   loc = factor * (gradrec_nopre.data + stab_nopre.data);
+        matrix_type   loc =  factor * (gradrec_nopre.data + stab_nopre.data);
         auto cell_rhs     =  disk::compute_rhs<cell_basis_type, cell_quadrature_type>(msh, cl, solution.f, degree);
         auto cell_id      =  msh.lookup(cl);
         auto tsr          =  tsr_vec[cell_id];
-        plasticity.compute(msh, cl, gradrec_nopre.oper, Uh_Th[cell_id],tsr); //WK: if diffusion changes with domain, it would be mandatory to include mu here, to do it locally
+        plasticity.compute(msh, cl, gradrec_nopre.oper, Uh_Th[cell_id], tsr); //WK: if diffusion changes with domain, it would be mandatory to include mu here, to do it locally
         auto scnp         =  statcond_pst.compute(msh, cl, loc, cell_rhs, plst_switch*plasticity.rhs);
         assembler_nopre.assemble(msh, cl, scnp);
     }
@@ -137,8 +142,6 @@ bool test_diffusion (MeshType & msh,   /* handle to the mesh */
                         cell_quadrature_type,
                         face_basis_type,
                         face_quadrature_type> projk(degree);
-    cell_basis_type         cell_basis(degree);
-    cell_quadrature_type    cell_quadrature(2*degree + 2);
 
     std::ofstream ofs( directory + "/plotnew.dat");
     for (auto& cl : msh)
@@ -169,7 +172,7 @@ bool test_diffusion (MeshType & msh,   /* handle to the mesh */
         auto cell_rhs = disk::compute_rhs<cell_basis_type, cell_quadrature_type>(msh, cl, solution.f, degree);
         auto cell_id  = msh.lookup(cl);
         plasticity.compute(msh, cl, gradrec_nopre.oper, Uh_Th[cell_id], tsr_vec[cell_id]);
-        dynamic_vector<scalar_type>   x = statcond_pst.recover(msh, cl, loc, cell_rhs, xFs, plst_switch*plasticity.rhs);
+        dynamic_vector<scalar_type>   x = statcond_pst.recover(msh, cl, loc, cell_rhs, xFs, plst_switch * plasticity.rhs);
 
         Uh_Th[cell_id]  = x;
 
@@ -178,7 +181,8 @@ bool test_diffusion (MeshType & msh,   /* handle to the mesh */
         rec(0) = x(0);
 
         //_____________________________________________________________________
-        auto qps_1 = cell_quadrature.integrate(msh, cl);
+        cell_basis_type         cell_basis(degree);
+        auto qps_1 = cq.integrate(msh, cl);
         for (auto& qp : qps_1)
         {
             auto phi  = cell_basis.eval_functions(msh, cl, qp.point());
@@ -239,7 +243,9 @@ bool test_diffusion (MeshType & msh,   /* handle to the mesh */
             //ofs << pot << " " << pot << std::endl;
         }
 
-        auto qps = cq.integrate(msh, cl);
+        cell_quadrature_type    cq2(quad_degree);
+
+        auto qps = cq2.integrate(msh, cl);
         size_t col = 0;
         for (auto& qp : qps)
         {
@@ -264,45 +270,68 @@ bool test_diffusion (MeshType & msh,   /* handle to the mesh */
     scalar_type TOL = 1.e-10;
     u_Ruh_error     = std::sqrt(u_Ruh_error);
     gamma_error     = std::sqrt(gamma_error);
+    err_dof         = std::sqrt(err_dof);
     scalar_type stopping_criterio = std::abs(ALG_error - gamma_error);
+    scalar_type error_stop_criterion = std::abs(err_dof - old_dof_error);
+
+    old_dof_error = err_dof;
     ALG_error = gamma_error;
-    ifs<<"  "<<gamma_error<<std::endl;
 
     auto diam = disk::diameter(msh);
     disk::errors<T> er;
     #if 0
     //auto er = disk::plasticity_post_processing<LoaderType>(msh,solution.sf,solution.df,tsr_vec,Uh_Th,pst, directory, degree, ifs,iter);
     auto er = disk::plasticity_post_processing(msh,solution.sf,solution.df,tsr_vec,Uh_Th,pst, directory, degree, ifs,iter);
-    std::cout << "L2-norm error, fun:   " << std::sqrt(err_fun) << std::endl;
-    std::cout << "L2-norm error, dof:   " << std::sqrt(err_dof) << std::endl;
-    std::cout << "L2-norm error, dfun:   " << std::sqrt(err_dfun) << std::endl;
     #endif
 
-    std::cout << "l2-norm error, gamma - Du:" << gamma_error << std::endl;
-    std::cout << "l2-norm error, iterations:" << stopping_criterio << std::endl;
-    #if 0
-    auto DIM = mesh_type::dimension;
-    if( DIM == 1)
-    {
-        if(er.u_uh < TOL)
-        {
-            std::cout << "/* break by convergence of ER.U-UH */" << std::endl;
+    std::cout << "L2-norm error, dof:   " << std::sqrt(err_dof) << std::endl;
+    std::cout << "L2-norm error, fun:   " << std::sqrt(err_fun) << std::endl;
+    std::cout << "L2-norm error, dfun:   " << std::sqrt(err_dfun) << std::endl;
+    std::cout << std::endl;
+    std::cout << "l2-norm error, L2_norm(dof):" << error_stop_criterion << std::endl;
+    std::cout << "l2-norm error, gamma - Du  :" << gamma_error << std::endl;
+    std::cout << "l2-norm error, ierations   :" << stopping_criterio << std::endl;
 
-            tfs<<degree<<"  " << pst.alpha <<"  " << diam<<"    "<< er.u_uh<<"   "<< er.Iu_uh<<"   "<< er.Du_Guh<<"   "<< std::sqrt(err_fun)<<"   " << std::sqrt(err_dof)<<"   "<< std::sqrt(err_dfun)<<std::endl;
+    ifs<<to_string(iter) <<"  "<<gamma_error<<" "<< std::sqrt(err_dof) <<"  "
+       <<std::sqrt(err_dfun)<<"    "<< std::sqrt(err_fun)<<std::endl;
+
+
+    auto DIM = mesh_type::dimension;
+//    if( DIM == 1)
+//    {
+        if( error_stop_criterion <= TOL)
+        {
+            std::cout << std::endl;
+            std::cout<< " /***********************************/" << std::endl;
+            std::cout << "/* break by convergence of ER.U-UH */" << std::endl;
+            std::cout<< " /***********************************/" << std::endl;
+
+            std::cout << std::endl;
+
+            std::cout << std::endl;
+
+            //tfs<<degree<<"  " << pst.alpha <<"  " << diam<<"    "<< er.u_uh<<"   "<< er.Iu_uh<<"   "<< er.Du_Guh<<"   "<< std::sqrt(err_fun)<<"   " << std::sqrt(err_dof)<<"   "<< std::sqrt(err_dfun)<<std::endl;
+            tfs<<degree<<"  " << pst.alpha <<"  " << diam<<"   "<< std::sqrt(err_fun)<<"   " << std::sqrt(err_dof)<<"   "<< std::sqrt(err_dfun)<<std::endl;
 
             return 1;
         }
-    }
-    #endif
+//    }
 
-    if(gamma_error < TOL)
+#if 0
+
+    if(gamma_error < TOL  || iter == max_iters - 1)
     {
         std::cout << "/* break by convergence of  gamma */" << std::endl;
+        tfs<<degree<<"  " << pst.alpha <<"  " << diam<<"    "<<gamma_error
+                    <<"  " << std::sqrt(err_dof) <<"  " << std::sqrt(err_dfun)
+                    <<"  "<< std::sqrt(err_fun)<<std::endl;
 
-        tfs<<degree<<"  " << pst.alpha <<"  " << diam<<"    "<< er.u_uh<<"   "<< er.Iu_uh<<"   "<< er.Du_Guh<<"   "<< std::sqrt(err_fun)<<"   " << std::sqrt(err_dof)<<"   "<< std::sqrt(err_dfun)<<std::endl;
+        //tfs<<degree<<"  " << pst.alpha <<"  " << diam<<"    "<< er.u_uh<<"   "<< er.Iu_uh<<"   "<< er.Du_Guh<<"   "<< std::sqrt(err_fun)<<"   " << std::sqrt(err_dof)<<"   "<< std::sqrt(err_dfun)<<std::endl;
 
         return 1;
     }
+    #endif
+
     #if 0
     if(stop_criterio < TOL_solver)
     {
@@ -463,7 +492,7 @@ int main (int argc, char** argv )
         loader.populate_mesh(msh);
 
         auto   dir_name   = disk::directory<scalar_type, 1>(pst.Bn, solution.name);
-        size_t num_remesh = 1*refine_on;
+        size_t num_remesh = 5*refine_on;
         auto   tsr_vec    = zero_tensor_vector(msh, degree);
 
         for( size_t imsh = 0; imsh <= num_remesh; imsh ++)
@@ -489,11 +518,11 @@ int main (int argc, char** argv )
               if (!tfs.is_open())
                 std::cout << "Error opening tfs";
 
-            RealType gamma_error(0.);
+            RealType gamma_error(0.),L2_error(0.);
             for(int iter = 0; iter < max_iters ; iter++)
             {
                 std::cout << "/* ___________________iter "<<iter<<"___________________ */" << std::endl;
-                bool brk = test_diffusion(msh, solution, pst, Uh_Th, tsr_vec, dir_name, ifs, degree, gamma_error, iter, tfs);
+                bool brk = test_diffusion(msh, solution, pst, Uh_Th, tsr_vec, dir_name, degree, gamma_error, L2_error,iter, max_iters, ifs,tfs);
                 if( brk == true)
                     break;
             }
@@ -537,7 +566,7 @@ int main (int argc, char** argv )
 
         loader.populate_mesh(msh);
         auto   dir_name   = disk::directory<scalar_type, 2>(pst.Bn, solution.name);
-        size_t num_remesh = 1*refine_on;
+        size_t num_remesh = 1 * refine_on;
         auto   tsr_vec    = zero_tensor_vector(msh, degree);
         for( size_t imsh = 0; imsh < num_remesh + 1; imsh ++)
         {
@@ -547,16 +576,17 @@ int main (int argc, char** argv )
             {
                 bool do_refinement;
                 disk::stress_based_mesh<mesh_type>   sbm(msh,tsr_vec,pst.yield, do_refinement, hanging_nodes);
-                std::cout << "do_refinement ? "<< do_refinement << std::endl;
+                std::cout << "Do Refinement No."<< imsh <<" ?  "<<do_refinement << std::endl;
                 if(!do_refinement)
                     break;
                 std::cout << "************* Refinement No.****************"<< imsh << std::endl;
-                auto info  =  "_n" + to_string(elems_1d) + "_g"+ to_string(hanging_on) + "_rmc_m" + method_str  +  "_a" +  to_string(pst.alpha);
+                auto info  =  "_n" + to_string(elems_1d) + "_g"+ to_string(hanging_on) + "_rmc" + to_string(imsh)
+                                    + "_m" + method_str  +  "_a" +  to_string(int(pst.alpha));
                 sbm.re_populate_mesh<loader_type>(msh, tsr_vec, pst.yield, dir_name, info, degree);
                 tsr_vec    = zero_tensor_vector(msh, degree);
             }
             auto other_info =  "_n" + to_string(elems_1d) + "_g"+ to_string(hanging_on) + "_rm" + to_string(imsh) +
-                                    "_m" + method_str  +  "_a" +  to_string(pst.alpha);
+                                    "_m" + method_str  +  "_a" +  to_string(int(pst.alpha));
             std::ofstream       ifs(dir_name + "/error" + other_info + ext);
             std::ofstream       tfs(dir_name + "/errors.dat", std::ios::app);
             if (!ifs.is_open())
@@ -567,18 +597,23 @@ int main (int argc, char** argv )
 
             auto Uh_Th   = startup(msh, degree, imsh);
 
-            RealType gamma_error(0.);
+            RealType gamma_error(0.), L2_error(0.);
             int iter;
             for(iter = 0; iter < max_iters ; iter++)
             {
                 std::cout << "/* ____iter "<<iter<<"_____ */" << std::endl;
                 //bool brk = test_diffusion<loader_type>(msh, solution, pst, Uh_Th, tsr_vec, dir_name, ifs, degree, gamma_error, iter,tfs);
-                bool brk = test_diffusion(msh, solution, pst, Uh_Th, tsr_vec, dir_name, ifs, degree, gamma_error, iter, tfs);
+                bool brk = test_diffusion(msh, solution, pst, Uh_Th, tsr_vec, dir_name, degree, gamma_error, L2_error,iter, max_iters, ifs,tfs);
                 if( brk == true)
                     break;
             }
+            std::cout << "/* plasticity_post_processing */" << std::endl;
             auto er = disk::plasticity_post_processing(msh, solution.sf,solution.df,tsr_vec,Uh_Th,pst,
-                                                        dir_name, degree, ifs, to_string(imsh), elems_1d, hanging_on,iter);
+                                                        dir_name, degree, ifs, to_string(imsh),  hanging_on, elems_1d, iter);
+            std::cout  << "l2-norm error,   u_uh:" << er.u_uh  << std::endl;
+            std::cout  << "l2-norm error,  Iu_uh:" << er.Iu_uh  << std::endl;
+            std::cout  << "l2-norm error, Du_Guh:" << er.Du_Guh << std::endl;
+
             ifs.close();
             tfs.close();
         }
