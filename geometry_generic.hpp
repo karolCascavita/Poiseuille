@@ -192,6 +192,13 @@ template<typename T, size_t DIM>
 void
 borrar(const generic_mesh<T, DIM>& msh)
 {
+    auto storage = msh.backend_storage();
+    auto points  = storage ->points;
+
+    std::cout << "/ **************** POINTS        **************** /" << std::endl;
+    for(auto& p: points)
+        std::cout << "      "<< p << std::endl;
+    std::cout << "/ **************** FACES:  cells **************** /" << std::endl;
     //typename generic_mesh<T, DIM>::cell::id_type
     for(auto itor = msh.faces_begin(); itor != msh.faces_end(); itor++)
     {
@@ -211,6 +218,19 @@ borrar(const generic_mesh<T, DIM>& msh)
         }
         std::cout<< std::endl;
     }
+    std::cout << "/ **************** FACES:  nodes **************** /" << std::endl;
+
+    //typename generic_mesh<T, DIM>::cell::id_type
+    for(auto itor = msh.faces_begin(); itor != msh.faces_end(); itor++)
+    {
+        auto fc = *itor;
+        std::cout << "fc_id  : "<< msh.lookup(fc)<< "      ; nodes :";
+        auto nodes = fc.point_ids();
+        for(auto& n: nodes)
+            std::cout << "     "<< n;
+        std::cout<< std::endl;
+    }
+    std::cout << "/ **************** CELSS:  faces **************** /" << std::endl;
 
     for(auto& cl : msh)
     {
@@ -222,6 +242,21 @@ borrar(const generic_mesh<T, DIM>& msh)
         std::cout<< std::endl;
     }
     std::cout<< std::endl;
+
+    std::cout << "/ **************** CELSS:  nodes **************** /" << std::endl;
+
+    for(auto& cl : msh)
+    {
+        std::cout << "cell : "<< msh.lookup(cl)<< "      ; nodes :";
+        auto nodes  = cl.point_ids();
+
+        for(auto& p : nodes)
+            std::cout <<"     "<< p;
+        std::cout<< std::endl;
+    }
+    std::cout<< std::endl;
+
+
 }
 
 
