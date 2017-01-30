@@ -580,15 +580,15 @@ dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename, cons
         std::cout << "Error opening file"<<std::endl;
     for (auto cl : msh)
     {
-
         auto fcs = faces(msh, cl);
         for (auto fc : fcs)
         {
             auto pts = points(msh, fc);
+
             if ( msh.is_boundary(fc) )
             {
                 ofs << "line([" << pts[0].x() << " " << pts[1].x() << "], [";
-                ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'r');";
+                ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'b');";
                 ofs << std::endl;
             }
             else
@@ -606,7 +606,7 @@ dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename, cons
                 if(mark == 2)
                     ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'g');";
                 if(mark == 1)
-                    ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'b');";
+                    ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'c');";
                 if(mark == 0)
                     ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'k');";
                 ofs << std::endl;
@@ -626,11 +626,33 @@ dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename)
         std::cout << "Error opening file"<<std::endl;
     for (auto cl : msh)
     {
+        ofs << " hold on"<<std::endl;
+
+        auto pts = points(msh, cl);
+        ofs << "  display(\'  celda "<< msh.lookup(cl)<<" \') "<<std::endl;
+
+        if(pts.size() < 1)
+           ofs << "  display(\' no tiene pts\') "<<std::endl;
+
+        for(auto& p : pts)
+            ofs<< " plot( "<< p.x() << ", " << p.y() <<",'o')"<<std::endl;
+
+        auto b = barycenter(msh,cl);
+        ofs<< " plot( "<< b.x() << ", " << b.y() <<",'r')"<<std::endl;
+        ofs<< "strValues = strtrim(cellstr(num2str("<< msh.lookup(cl) <<",'(%d)')))"<<std::endl;
+        ofs<< "text("<<b.x()<< ","<< b.y() <<",strValues,'VerticalAlignment','bottom');"<<std::endl;
+
 
         auto fcs = faces(msh, cl);
+        if(fcs.size() < 1)
+            ofs << "  display(\'cell "<< msh.lookup(cl)<<" no tiene caras\') "<<std::endl;
+
         for (auto fc : fcs)
         {
             auto pts = points(msh, fc);
+            if(pts.size() < 1)
+               ofs << "  display(\' face "<< msh.lookup(fc)<<" en la celda "<< msh.lookup(cl)<<" no tiene pts\') "<<std::endl;
+
             if ( msh.is_boundary(fc) )
             {
                 ofs << "line([" << pts[0].x() << " " << pts[1].x() << "], [";
