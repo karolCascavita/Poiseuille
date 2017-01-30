@@ -689,7 +689,7 @@ public:
         if (!cofs.is_open())
             std::cout << "Error opening file"<<std::endl;
 
-        cofs<< "v = cell("<< msh.cells_size()<<", 1);"<< std::endl;
+        cofs<< "V = cell("<< msh.cells_size()<<", 2);"<< std::endl;
         for(auto& cel : msh)
         {
             size_t qp_cont = 0;
@@ -741,12 +741,29 @@ public:
                 }
             }
             cofs<< " ];"<<std::endl;
+
+            cofs<< " B = ["<<std::endl;
+            auto fcs = faces(msh, cel);
+            for (auto& fc : fcs)
+            {
+                auto pts = points(msh, fc);
+
+                for(auto& tp: pts)
+                {
+                    for (size_t d = 0; d < DIM; d++)
+                        cofs << tp[d] << " ";
+                }
+                cofs<<std::endl;
+            }
+            cofs<< " ];"<<std::endl;
+
             cofs<< " V{"<<cell_id + 1 <<",1} = A;"<<std::endl;
+            cofs<< " V{"<<cell_id + 1 <<",2} = B;"<<std::endl;
 
         }
 
         cofs<< "X = ["<<std::endl;
-        for (auto cl : msh)
+        for (auto& cl : msh)
         {
             auto bar = barycenter(msh,cl);
             cofs<< i+1 << " " << bar.x()<< " "<< bar.y()<<std::endl;
@@ -1153,8 +1170,9 @@ private:
                 compute(msh, cl, cl_vector.at(0), sf, df, x, er);
                 compute(msh, cl, cl_vector.at(1), sf, df, x, er);
             }
-            compute(msh, cl, cl, sf, df, x, er);
             #endif
+
+            compute(msh, cl, cl, sf, df, x, er);
         }
 
         template<typename Solution, typename Gradient>
@@ -1268,7 +1286,7 @@ plasticity_post_processing( mesh<T,DIM,Storage>&  msh,
     typedef dynamic_matrix<scalar_type>                 matrix_type;
 
     errors<scalar_type> er;
-    #if 0
+
     for (auto& cl : msh)
     {
         auto id =   msh.lookup(cl);
@@ -1287,8 +1305,7 @@ plasticity_post_processing( mesh<T,DIM,Storage>&  msh,
     std::cout  << "l2-norm error,   u_uh:" << er.u_uh  << std::endl;
     std::cout  << "l2-norm error,  Iu_uh:" << er.Iu_uh  << std::endl;
     std::cout  << "l2-norm error, Du_Guh:" << er.Du_Guh << std::endl;
-    efs<<  er.u_uh  <<" "<< er.Iu_uh << " " << er.Du_Guh ;
-    #endif
+    //efs<<  er.u_uh  <<" "<< er.Iu_uh << " " << er.Du_Guh ;
 
     post_processing<T,DIM,Storage> pp;
 
