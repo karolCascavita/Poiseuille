@@ -328,7 +328,9 @@ public:
                     vertices   = verify_polygon(msh, cl, pts);
                 else
                     vertices   = pts;
+                    else
         */
+
 
         if(pts.size() > 3) // &  hanging nodes)
         {
@@ -336,7 +338,6 @@ public:
             if(pair.first)
                 vertices = pair.second;
         }
-        else
             vertices = pts;
 
         switch(vertices.size())
