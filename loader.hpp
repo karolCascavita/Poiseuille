@@ -171,9 +171,13 @@ public:
     std::vector<polygon<10>>                        m_decagons;
     std::vector<polygon<11>>                        m_hendecagons;
     std::vector<polygon<12>>                        m_dodecagons;
+    std::vector<polygon<13>>                        m_triadecagons;
+    std::vector<polygon<14>>                        m_tesseradecagons;
+    std::vector<polygon<15>>                        m_pentadecagons;
 
     std::vector<std::array<ident_impl_t, 2>>        m_boundary_edges;
     std::vector<std::array<ident_impl_t, 4>>        m_edges;
+    std::vector<int> m_index_transf;
 
     //std::vector<std::set<typename edge_type::id_type>>      m_edge_node_connectivity;
 private:
@@ -329,18 +333,14 @@ private:
 
                 if (pt2 < pt1)
                     std::swap(pt1, pt2);
-                //std::cout << "/* message 3 */" << std::endl;
 
                 edge_type edge{{pt1, pt2}};
-                //std::cout << "/* message 4 */" << std::endl;
 
                 auto edge_id = find_element_id(storage->edges.begin(),
                                                storage->edges.end(), edge);
-                //std::cout << "/* message 5 */" << std::endl;
 
                 if (!edge_id.first)
                     throw std::invalid_argument("Edge not found (hanging nodes?)");
-                //std::cout << "/* message 6 */" << std::endl;
 
                 surface_edges[i] = edge_id.second;
                 //std::cout << "/* message 7 */" << std::endl;
@@ -354,6 +354,22 @@ private:
             surfedg.push_back( surface );
         }
 
+    }
+    void
+    index_transf(const std::vector<surface_type>& surfaces)
+    {
+        std::vector<int> index(surfaces.size(), 0);
+        for(int i = 0 ; i != index.size() ; i++)
+            index.at(i) = i;
+
+        std::sort(index.begin(), index.end(),[&](const int& a, const int& b)
+            {
+                surface_type s1  = surfaces.at(a);
+                surface_type s2  = surfaces.at(b);
+                return (s1 < s2);
+            }
+        );
+        m_index_transf = index;
     }
     #if 0
     set_neighbors(mesh_type& msh, m_edges, std::vector<surface_type>& surfaces);
@@ -467,7 +483,11 @@ public:
                           m_enneagons.size() +
                           m_decagons.size()  +
                           m_hendecagons.size() +
-                          m_dodecagons.size());
+                          m_dodecagons.size() +
+                          m_triadecagons.size()  +
+                          m_pentadecagons.size() +
+                          m_tesseradecagons.size())
+                          ;
 
         //std::cout << "/* message Put Polygons*/" << std::endl;
         //std::cout << "/* triangles */" << std::endl;
@@ -502,9 +522,22 @@ public:
         put_polygons(msh, m_dodecagons, surfaces);
         m_dodecagons.clear();
 
+        put_polygons(msh, m_triadecagons, surfaces);
+        m_triadecagons.clear();
+
+        put_polygons(msh, m_tesseradecagons, surfaces);
+        m_tesseradecagons.clear();
+
+        put_polygons(msh, m_pentadecagons, surfaces);
+        m_pentadecagons.clear();
+
+        index_transf(surfaces);
+
         std::sort(surfaces.begin(), surfaces.end());
 
         storage->surfaces = std::move(surfaces);
+
+
 
         //std::cout << "/* message Print stats*/" << std::endl;
         /* Print stats */
