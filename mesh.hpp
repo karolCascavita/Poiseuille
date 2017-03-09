@@ -573,6 +573,45 @@ end(const mesh<T, DIM, Storage>& msh)
 template<template<typename, size_t, typename> class Mesh,
          typename T, typename Storage>
 void
+dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename)
+{
+    std::ofstream ofs(filename);
+    if (!ofs.is_open())
+        std::cout << "Error opening file"<<std::endl;
+
+    ofs << " hold on"<<std::endl;
+    for (auto cl : msh)
+    {
+        auto pts = points(msh, cl);
+        auto b  = barycenter(msh,cl);
+        auto id = msh.lookup(cl);
+        auto fcs = faces(msh, cl);
+
+        for (auto fc : fcs)
+        {
+            auto pts = points(msh, fc);
+            if(pts.size() < 1)
+
+            if ( msh.is_boundary(fc) )
+            {
+                ofs << "line([" << pts[0].x() << " " << pts[1].x() << "], [";
+                ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'r');";
+                ofs << std::endl;
+            }
+            else        
+            {
+                ofs << "line([" << pts[0].x() << " " << pts[1].x() << "], [";
+                ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'k');";
+                ofs << std::endl;
+            }
+        }
+    }
+    ofs.close();
+}
+
+template<template<typename, size_t, typename> class Mesh,
+         typename T, typename Storage>
+void
 dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename, const std::vector<size_t>& vec)
 {
     std::ofstream ofs(filename);
@@ -584,6 +623,7 @@ dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename, cons
         for (auto fc : fcs)
         {
             auto pts = points(msh, fc);
+
             if ( msh.is_boundary(fc) )
             {
                 ofs << "line([" << pts[0].x() << " " << pts[1].x() << "], [";
@@ -618,18 +658,45 @@ dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename, cons
 template<template<typename, size_t, typename> class Mesh,
          typename T, typename Storage>
 void
-dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename)
+dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename,
+                const std::vector<size_t>& levels, const size_t imsh)
 {
     std::ofstream ofs(filename);
     if (!ofs.is_open())
         std::cout << "Error opening file"<<std::endl;
     for (auto cl : msh)
     {
+        ofs << " hold on"<<std::endl;
+
+        auto pts = points(msh, cl);
+        ofs << " \% display(\'  celda "<< msh.lookup(cl)<<" \') ;"<<std::endl;
+
+        if(pts.size() < 1)
+           ofs << " \%display(\' no tiene pts\') ;"<<std::endl;
+
+        for(auto& p : pts)
+            ofs<< " \%plot( "<< p.x() << ", " << p.y() <<",'o');"<<std::endl;
+
+        auto b  = barycenter(msh,cl);
+        auto id = msh.lookup(cl);
+        ofs<< "\%plot( "<< b.x() << ", " << b.y() <<",'r');"<<std::endl;
+        //ofs<< "\%strLevel = strtrim(cellstr(num2str("<< levels.at(id) <<",'(%d)')));"<<std::endl;
+        //ofs<< "\%text("<<b.x()<< ","<< b.y() <<",strLevel,'VerticalAlignment','bottom');"<<std::endl;
+
+        ofs<< "\%strName = strtrim(cellstr(num2str("<< id <<",'(%d)')));"<<std::endl;
+        ofs<< "\%text("<<b.x()<< ","<< b.y() <<",strName,'VerticalAlignment','bottom');"<<std::endl;
+
 
         auto fcs = faces(msh, cl);
+        if(fcs.size() < 1)
+            ofs << " \% display(\'cell "<< msh.lookup(cl)<<" no tiene caras\'); "<<std::endl;
+
         for (auto fc : fcs)
         {
             auto pts = points(msh, fc);
+            if(pts.size() < 1)
+               ofs << " \%display(\' face "<< msh.lookup(fc)<<" en la celda "<< msh.lookup(cl)<<" no tiene pts\'); "<<std::endl;
+
             if ( msh.is_boundary(fc) )
             {
                 ofs << "line([" << pts[0].x() << " " << pts[1].x() << "], [";
