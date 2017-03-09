@@ -190,7 +190,7 @@ face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
 
 template<typename T, size_t DIM>
 void
-borrar(const generic_mesh<T, DIM>& msh)
+check_older_msh(const generic_mesh<T, DIM>& msh)
 {
     auto storage = msh.backend_storage();
     auto points  = storage ->points;
