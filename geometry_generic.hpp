@@ -120,7 +120,7 @@ face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
 
         if (itor != fcs.end() && !(fc < *itor))
         {
-            auto cl_id = msh.lookup(cl);
+            auto cl_id = cl.get_id();
             ret.push_back(cl_id);
         }
     }
@@ -170,14 +170,14 @@ face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
     }
     else
     {
-        auto cell_id = msh.lookup(cell);
+        auto cell_id =cell.get_id();
 
         for(auto& cl : msh)
         {
             auto fcs   = faces(msh,cl);
             std::sort(fcs.begin(), fcs.end());
             auto itor  = std::lower_bound(fcs.begin(), fcs.end(), face);
-            auto neighbor_id = msh.lookup(cl);
+            auto neighbor_id = cl.get_id();
 
             if( itor != fcs.end() && !(face < *itor) && (neighbor_id != cell_id))
                 return neighbor_id;
