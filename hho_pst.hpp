@@ -115,7 +115,7 @@ tensor_zero_vector(const mesh<T,DIM,Storage>& msh, const size_t degree)
 
     for (auto& cl : msh)
     {
-        auto  id = msh.lookup(cl);
+        auto  id = cl.get_id();
         tensors<T>  tsr;
         tsr.zero_tensor(msh, cl, degree);
         vec.at(id)   =  tsr;
@@ -246,7 +246,8 @@ public:
 
 template< typename T, size_t DIM, typename Storage>
 auto
-high_order_reconstruction_nopre(const mesh<T, DIM, Storage>&  msh,  const typename mesh<T, DIM, Storage>::cell& cl,
+high_order_reconstruction_nopre(const mesh<T, DIM, Storage>&  msh,
+                                const typename mesh<T, DIM, Storage>::cell& cl,
                                 const dynamic_matrix<T>& rec_oper,
                                 const dynamic_vector<T>& v,
                                 const size_t degree)
@@ -350,12 +351,13 @@ class plasticity
     typedef static_vector<T, mesh_type::dimension>   m_static_vector;
     typedef typename CellBasisType::gradient_value_type gradient_value_type_pr;
 
-    cell_basis_type                         cell_basis;
-    cell_quadrature_type                    cell_quadrature;
+    cell_basis_type                             cell_basis;
+    cell_quadrature_type                        cell_quadrature;
 
-    face_basis_type                         face_basis;
-    face_quadrature_type                    face_quadrature;
+    face_basis_type                             face_basis;
+    face_quadrature_type                        face_quadrature;
 
+    size_t                                  m_quad_degree;
     size_t                                  m_degree;
     T                                       m_yield;
     T                                       m_alpha;
@@ -363,14 +365,19 @@ class plasticity
 public:
     vector_type     rhs;
 
-
     plasticity()                = delete;
-    plasticity(const size_t degree, const plasticity_data<T>& pst)
+    plasticity(const size_t degree, const size_t quad_degree,
+                                    const plasticity_data<T>& pst)
     //WK: for mu as tensor one should check this part
-        : m_degree(degree), m_alpha(pst.alpha), m_yield(pst.yield)
+        : m_degree(degree), m_alpha(pst.alpha), m_yield(pst.yield), m_quad_degree(quad_degree)
     {
-        cell_basis          = cell_basis_type(m_degree + 1); // This is k + 1  just if I want to use \nabla r^{k + 1}
-        face_basis          = face_basis_type(m_degree);
+
+        cell_basis  =  cell_basis_type(m_degree + 1); // This is k + 1  just if I want to use \nabla r^{k + 1}
+        face_basis  =  face_basis_type(m_degree);
+
+        cell_quadrature     = cell_quadrature_type(m_quad_degree);
+        face_quadrature     = face_quadrature_type(m_quad_degree);
+
         if(pst.method == true)
             m_method_coef = 1. / m_alpha ;
         else
@@ -387,91 +394,186 @@ public:
 
         //std::cout << "/**********   CELL = "<<msh.lookup(cl)<<"*********/" << std::endl;
         //WK: for p-adaptation quad_degree is not the same for all cells
-        size_t quad_degree = tsr.quad_degree;
 
-        cell_quadrature     = cell_quadrature_type(quad_degree);
-        face_quadrature     = face_quadrature_type(quad_degree);
+        timecounter tc;
+
+        std::map<std::string, double> timings, timings2, timings1;
+
+        tc.tic();
 
         auto fcs = faces(msh, cl);
         auto num_faces      = fcs.size();
         auto cell_range     = cell_basis.range(0,m_degree);
+        auto col_range      = cell_basis.range(1,m_degree+1);
+        auto row_range      = disk::dof_range(0,mesh_type::dimension);
         auto num_cell_dofs  = cell_range.size();
         auto num_face_dofs  = face_basis.size();
-        dofspace_ranges dsr(num_cell_dofs, num_face_dofs, num_faces);
-        size_t cell_size = num_cell_dofs;
-
+        dofspace_ranges    dsr(num_cell_dofs, num_face_dofs, num_faces);
+        matrix_type    ruh  = rec_oper * uh_TF;
         rhs  = vector_type::Zero(dsr.total_size());
 
         size_t cont  =  0;
         auto   cqs   =  cell_quadrature.integrate(msh, cl);
 
+        tc.toc();
+        //std::cout << "Pre_computations..."<< tc <<" seconds." <<std::endl;
+        //std::cout << "Cell computations..." << std::endl;
+        tc.tic();
+
         for (auto& qp : cqs)
         {
+            timecounter tc_detail;
+            tc_detail.tic();
+
             auto dphi       =   cell_basis.eval_gradients(msh, cl, qp.point());
-            auto col_range  =   cell_basis.range(1,m_degree+1);
-            auto row_range  =   disk::dof_range(0,mesh_type::dimension);
+            tc_detail.toc();
+            timings["Quadratures stuffs"] += tc_detail.to_double();
+            tc_detail.tic();
 
             matrix_type dphi_matrix =   make_gradient_matrix(dphi);
-            matrix_type dphi_taken  =   take(dphi_matrix, row_range, col_range);
-            matrix_type dphi_rec    =   dphi_taken * rec_oper;
-            vector_type dphi_rec_uh =   dphi_rec * uh_TF;
-            matrix_type dphi_       =   take(dphi_matrix, row_range, cell_range);
+            tc_detail.toc();
+            timings["Gradient: Make_matrix"] += tc_detail.to_double();
+            tc_detail.tic();
 
-            vector_type  xi    =  tsr.siglam.col(cont)  +  m_alpha * dphi_rec_uh;
+            matrix_type dphi_taken  =   take(dphi_matrix, row_range, col_range);
+            tc_detail.toc();
+            timings["Gradient: take_matrix"] += tc_detail.to_double();
+            tc_detail.tic();
+
+            vector_type dphi_ruh    =   dphi_taken * ruh;
+
+            tc_detail.toc();
+            timings["Gradient: nabla * ruh"] += tc_detail.to_double();
+            tc_detail.tic();
+
+
+            matrix_type dphi_       =   take(dphi_matrix, row_range, cell_range);
+            matrix_type dphi_rec    =   dphi_taken * rec_oper;
+
+            tc_detail.toc();
+            timings["Gradient stuffs"] += tc_detail.to_double();
+            tc_detail.tic();
+
+            vector_type  xi    =  tsr.siglam.col(cont)  +  m_alpha * dphi_ruh;
+            auto xi_norm = xi.norm();
+
+            tc_detail.toc();
+            timings["Xi computate"] += tc_detail.to_double();
+            tc_detail.tic();
+
             vector_type  gamma =  vector_type::Zero(mesh_type::dimension);
 
-            if(xi.norm() > m_yield)
-                gamma   = m_method_coef * (xi.norm()- m_yield) * (xi / xi.norm());
+            if(xi_norm > m_yield)
+                gamma   = m_method_coef * (xi_norm - m_yield) * (xi / xi_norm);
 
-            tsr.siglam.col(cont) +=  m_alpha * ( dphi_rec_uh - gamma );
+            tc_detail.toc();
+            timings["Gamma computate"] += tc_detail.to_double();
+            tc_detail.tic();
+
+            tsr.siglam.col(cont) +=  m_alpha * ( dphi_ruh - gamma );
             tsr.gamma.col(cont)   =  gamma;
-            tsr.xi_norm(cont)     =  xi.norm();
+            tsr.xi_norm(cont)     =  xi_norm;
+
+            tc_detail.toc();
+            timings["tensors storing"] += tc_detail.to_double();
+            tc_detail.tic();
 
             //( Dv_T, sigma - alpha* gamma)_T
-            rhs.head(cell_size)  += qp.weight() * dphi_.transpose() * (tsr.siglam.col(cont) - m_alpha * gamma) ;
-            //rhs  += qp.weight() * dphi_rec.transpose() * (tsr.siglam.col(cont) - m_alpha * gamma) ;
+            //rhs.head(num_cell_dofs)  += qp.weight() * dphi_.transpose() * (tsr.siglam.col(cont) - m_alpha * gamma) ;
+            rhs  += qp.weight() * dphi_rec.transpose() * (tsr.siglam.col(cont) - m_alpha * gamma) ;
+
+            tc_detail.toc();
+            timings["rhs computations"] += tc_detail.to_double();
+            tc_detail.tic();
+
             ++cont;
         }
+        tc.toc();
+        //std::cout << "Cell total time: " << tc << " seconds." << std::endl;
+        //for (auto& t : timings)
+        //    std::cout << " * " << t.first << ": " << t.second << " seconds." << std::endl;
+
         //#if 0
+
+        //std::cout << "Starting face computations..." << std::endl;
+        tc.tic();
         // Boundary term
         size_t fqs_size = 0;
         for (size_t face_i = 0; face_i < num_faces; face_i++)
         {
+            timecounter tc_detail;
+            tc_detail.tic();
+
             auto current_face_range = dsr.face_range(face_i);
-            auto fc = fcs.at(face_i);
-            auto fqs= face_quadrature.integrate(msh, fc);
+            auto fc   = fcs.at(face_i);
+            auto fqs  = face_quadrature.integrate(msh, fc);
             fqs_size +=  fqs.size();
             auto n = normal(msh, cl, fc);
 
+            tc_detail.toc();
+            timings1["Pre"] += tc_detail.to_double();
+            tc_detail.tic();
+
             for (auto& qp : fqs)
             {
+                tc_detail.tic();
+                auto f_phi  = face_basis.eval_functions(msh, fc, qp.point());
                 auto c_phi  = cell_basis.eval_functions(msh, cl, qp.point());
                 auto c_dphi = cell_basis.eval_gradients(msh, cl, qp.point());
-                auto f_phi  = face_basis.eval_functions(msh, fc, qp.point());
-                auto col_range  =   cell_basis.range(1,m_degree+1);
-                auto row_range  =   disk::dof_range(0,mesh_type::dimension);
+
+                tc_detail.toc();
+                timings1["Quadratures stuffs"] += tc_detail.to_double();
+                tc_detail.tic();
 
                 matrix_type c_dphi_matrix =   make_gradient_matrix(c_dphi);
+                tc_detail.toc();
+                timings1["Gradient: Make_matrix"] += tc_detail.to_double();
+                tc_detail.tic();
+
                 matrix_type c_dphi_taken  =   take(c_dphi_matrix, row_range, col_range);
-                matrix_type c_dphi_rec    =   c_dphi_taken * rec_oper;
-                vector_type c_dphi_rec_uh =   c_dphi_rec * uh_TF;
+                tc_detail.toc();
+                timings1["Gradient: take_matrix"] += tc_detail.to_double();
+                tc_detail.tic();
+
+                vector_type c_dphi_ruh    =   c_dphi_taken * ruh;
+
+                tc_detail.toc();
+                timings1["Gradient: nabla * ruh"] += tc_detail.to_double();
+                tc_detail.tic();
 
                 // xi = sigma + alpha *Dr(u)
-                vector_type  xi    =  tsr.siglam.col(cont)  +  m_alpha * c_dphi_rec_uh;
+                vector_type  xi    =  tsr.siglam.col(cont)  +  m_alpha * c_dphi_ruh;
+                auto xi_norm = xi.norm();
+
+                tc_detail.toc();
+                timings1["Xi computate"] += tc_detail.to_double();
+                tc_detail.tic();
+
+
                 vector_type  gamma =  vector_type::Zero(mesh_type::dimension);
+                if(xi_norm > m_yield)
+                    gamma  = m_method_coef * (xi_norm - m_yield)* (xi / xi_norm);
+                tc_detail.toc();
+                timings1["Gamma computate"] += tc_detail.to_double();
+                tc_detail.tic();
 
-                if(xi.norm() > m_yield)
-                    gamma  = m_method_coef * (xi.norm()- m_yield)* (xi / xi.norm());
-
-                tsr.siglam.col(cont) += m_alpha * ( c_dphi_rec_uh - gamma );
+                tsr.siglam.col(cont) += m_alpha * ( c_dphi_ruh - gamma );
                 tsr.gamma.col(cont)   = gamma;
-                tsr.xi_norm(cont)     = xi.norm();
+                tsr.xi_norm(cont)     = xi_norm;
+
+                tc_detail.toc();
+                timings1["Tensor storing"] += tc_detail.to_double();
+                tc_detail.tic();
 
                 // ((sigma - alpha*gamma) * n
                 vector_type str =  tsr.siglam.col(cont) - m_alpha * gamma;
                 scalar_type p1  =  make_prod_stress_n( str , n);
 
-                //#if 0
+                tc_detail.toc();
+                timings1["others"] += tc_detail.to_double();
+                tc_detail.tic();
+
+                #if 0
                 // ( (sigma - alpha*gamma) * n, vT )_F
                 for (size_t i = cell_range.min(); i < cell_range.size(); i++)
                     rhs(i)   -= qp.weight() * p1 * c_phi.at(i) ;
@@ -479,43 +581,82 @@ public:
                 // ( (sigma - alpha*gamma) * n, vF )_F
                 for (size_t i = 0, ii = current_face_range.min(); i < current_face_range.size(); i++, ii++)
                     rhs(ii)  += qp.weight() * p1 * f_phi.at(i);
-                //#endif
+                #endif
                 ++cont;
             }
         }
+
+        tc.toc();
+        //std::cout << "Face total time: " << tc << " seconds." << std::endl;
+        //for (auto& t : timings1)
+        //    std::cout << " * " << t.first << ": " << t.second << " seconds." << std::endl;
+
         //#endif
         //#if 0
+        tc.tic();
         // tensor values in vertices
         auto pts = points(msh,cl);
-        //if we store face gauss points change that like this  + num_faces*fqs_size
         auto pt_pos = cqs.size() + fqs_size;
         if(pt_pos != cont)
             throw std::invalid_argument("Invalid indices in storing values at Gauss points");
 
+
         for(size_t i = 0, j = pt_pos; i < pts.size(); i++, j ++)
         {
             //std::cout << "j = "<< j<< std::endl;
+            timecounter tc_detail;
+            tc_detail.tic();
 
             auto dphi       =   cell_basis.eval_gradients(msh, cl, pts.at(i));
-            auto col_range  =   cell_basis.range(1,m_degree+1);
-            auto row_range  =   disk::dof_range(0,mesh_type::dimension);
+            tc_detail.toc();
+            timings2["Quadratures stuffs"] += tc_detail.to_double();
+            tc_detail.tic();
 
             matrix_type dphi_matrix =   make_gradient_matrix(dphi);
+            tc_detail.toc();
+            timings2["Gradient: make_matrix"] += tc_detail.to_double();
+            tc_detail.tic();
+
             matrix_type dphi_taken  =   take(dphi_matrix, row_range, col_range);
-            matrix_type dphi_rec    =   dphi_taken * rec_oper;
-            vector_type dphi_rec_uh =   dphi_rec*uh_TF;
+            tc_detail.toc();
+            timings2["Gradient: take_matrix"] += tc_detail.to_double();
+            tc_detail.tic();
 
-            vector_type xi    =   tsr.siglam.col(j)  +  m_alpha * dphi_rec_uh;
+            vector_type dphi_ruh    =   dphi_taken * ruh;
+
+            tc_detail.toc();
+            timings2["Gradient: nabla * ruh"] += tc_detail.to_double();
+            tc_detail.tic();
+
+            vector_type xi    =   tsr.siglam.col(j)  +  m_alpha * dphi_ruh;
+            auto xi_norm = xi.norm();
+
+            tc_detail.toc();
+            timings2["Xi computate"] += tc_detail.to_double();
+            tc_detail.tic();
+
             vector_type gamma =   vector_type::Zero(mesh_type::dimension);
+            if(xi_norm > m_yield)
+                gamma = m_method_coef * (xi_norm - m_yield) * (xi / xi_norm);
 
-            if(xi.norm() > m_yield)
-                gamma = m_method_coef * (xi.norm() - m_yield) * (xi / xi.norm());
+            tc_detail.toc();
+            timings2["Gamma computate"] += tc_detail.to_double();
+            tc_detail.tic();
 
-            tsr.siglam.col(j) += m_alpha * ( dphi_rec_uh - gamma );
+            tsr.siglam.col(j) += m_alpha * ( dphi_ruh - gamma );
             tsr.gamma.col(j)   = gamma;
-            tsr.xi_norm(j)     = xi.norm();
+            tsr.xi_norm(j)     = xi_norm;
+
+            tc_detail.toc();
+            timings2["Tensor storing"] += tc_detail.to_double();
+            tc_detail.tic();
 
         }
+        tc.toc();
+        //std::cout << "Vertices total time: " << tc << " seconds." << std::endl;
+        //for (auto& t : timings2)
+        //    std::cout << " * " << t.first << ": " << t.second << " seconds." << std::endl;
+
         //#endif
 
     }
