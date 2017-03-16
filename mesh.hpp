@@ -313,6 +313,8 @@ public:
 
     typedef surface_type                                        cell;
     typedef edge_type                                           face;
+
+
     const static size_t dimension = 2;
 
     /* cell iterators */
@@ -336,6 +338,62 @@ public:
     size_t  cells_size() const { return this->backend_storage()->surfaces.size(); }
     size_t  faces_size() const { return this->backend_storage()->edges.size(); }
 
+    bool
+    is_special_cell(typename cell::id_type id) const
+    {
+        return this->backend_storage()->special_surfaces.at(id).first;
+    }
+    bool
+    is_special_cell(const cell& cl) const
+    {
+        auto id = cl.get_id();
+        return this->backend_storage()->special_surfaces.at(id).first;
+    }
+    std::vector<typename point_type::id_type>
+    get_vertices_ids(typename cell::id_type id) const
+    {
+        auto sp =  this->backend_storage()->special_surfaces.at(id);
+        return sp.second;
+    }
+
+    std::vector<typename point_type::id_type>
+    get_vertices_ids(const cell& cl) const
+    {
+        auto id = cl.get_id();
+        auto sp =  this->backend_storage()->special_surfaces.at(id);
+        return sp.second;
+    }
+
+    std::vector<point_type>
+    get_vertices(typename cell::id_type id , const std::vector<point_type>& pts) const
+    {
+        typedef std::pair<bool, std::vector<typename point_type::id_type>> pair;
+        pair sp =  this->backend_storage()->special_surfaces.at(id);
+        std::vector<typename point_type::id_type> vertices_ids = sp.second;
+        std::vector<point_type> vertices(vertices_ids.size());
+
+        size_t i = 0;
+        for(auto& id: vertices_ids)
+            vertices.at(i++) = pts.at(id);
+
+        return vertices;
+    }
+    std::vector<point_type>
+    get_vertices(const cell& cl, const std::vector<point_type>& pts) const
+    {
+        typedef std::pair<bool, std::vector<typename point_type::id_type>> pair;
+
+        auto id = cl.get_id();
+        pair sp =  this->backend_storage()->special_surfaces.at(id);
+        std::vector<typename point_type::id_type>  vertices_ids = sp.second;
+        std::vector<point_type> vertices(vertices_ids.size());
+
+        size_t i = 0;
+        for(auto& id: vertices_ids)
+            vertices.at(i++) = pts.at(id);
+
+        return vertices;
+    }
     bool is_boundary(typename face::id_type id) const
     {
         return this->backend_storage()->boundary_edges.at(id);
@@ -598,7 +656,7 @@ dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename)
                 ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'r');";
                 ofs << std::endl;
             }
-            else        
+            else
             {
                 ofs << "line([" << pts[0].x() << " " << pts[1].x() << "], [";
                 ofs << pts[0].y() << " " << pts[1].y() << "], 'Color', 'k');";
