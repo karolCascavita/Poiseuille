@@ -8,6 +8,7 @@
 #include "hho/hho_pst.hpp"
 #include "loaders/plasticity_mesh_adaptation.hpp"
 #include "visualization/post_processing_all.hpp"
+#include "timecounter.h"
 
 #include <unsupported/Eigen/SparseExtra>
 
@@ -94,7 +95,7 @@ bool SOLVE(MeshType & msh,   /* handle to the mesh */
                         cell_basis_type,
                         cell_quadrature_type,
                         face_basis_type,
-                        face_quadrature_type>  plasticity(degree,pst);
+                        face_quadrature_type>  plasticity(degree, quad_degree, pst);
 
     cell_basis_type         cb(degree+1);
     cell_quadrature_type    cq(2*degree+2);
@@ -111,25 +112,72 @@ bool SOLVE(MeshType & msh,   /* handle to the mesh */
         factor = pst.mu;
         plst_switch = 0.;
     }
+
+    timecounter tc;
+    std::map<std::string, double> timings;
+
+    /* ASSEMBLE PROBLEM */
+    //std::cout << "Assembling..." << std::endl;
+    tc.tic();
     for (auto& cl : msh)
     {
+        timecounter tc_detail;
+
+        tc_detail.tic();
         gradrec_nopre.compute(msh, cl);
+        tc_detail.toc();
+        timings["Gradient reconstruction"] += tc_detail.to_double();
+        tc_detail.tic();
         stab_nopre.compute(msh, cl, gradrec_nopre.oper);
-        matrix_type   loc =  factor * (gradrec_nopre.data + stab_nopre.data);
-        auto cell_rhs     =  disk::compute_rhs<cell_basis_type, cell_quadrature_type>(msh, cl, solution.f, degree);
-        auto cell_id      =  msh.lookup(cl);
+        tc_detail.toc();
+        timings["Stabilization"] += tc_detail.to_double();
+        tc_detail.tic();
+        auto cell_id      =  cl.get_id();
         auto tsr          =  tsr_vec.at(cell_id);
         plasticity.compute(msh, cl, gradrec_nopre.oper, Uh_Th.at(cell_id), tsr); //WK: if diffusion changes with domain, it would be mandatory to include mu here, to do it locally
+        tc_detail.toc();
+        timings["Plasticity"] += tc_detail.to_double();
+        tc_detail.tic();
+        auto cell_rhs     =  disk::compute_rhs<cell_basis_type, cell_quadrature_type>(msh, cl, solution.f, degree);
+        matrix_type   loc =  factor * (gradrec_nopre.data + stab_nopre.data);
         auto scnp         =  statcond_pst.compute(msh, cl, loc, cell_rhs, plst_switch*plasticity.rhs);
+        tc_detail.toc();
+        timings["Static condensation"] += tc_detail.to_double();
         assembler_nopre.assemble(msh, cl, scnp);
     }
     assembler_nopre.impose_boundary_conditions(msh, solution.sf);
     assembler_nopre.finalize();
+    tc.toc();
+    std::cout << "Assembly total time: " << tc << " seconds." << std::endl;
+    for (auto& t : timings)
+        std::cout << " * " << t.first << ": " << t.second << " seconds." << std::endl;
+
+    /* SOLVE */
 
     Eigen::SparseLU<Eigen::SparseMatrix<scalar_type>>   solver;
+
+    size_t systsz = assembler_nopre.matrix.rows();
+    size_t nnz = assembler_nopre.matrix.nonZeros();
+
+    std::cout << "Starting linear solver..." << std::endl;
+    std::cout << " * Solving for " << systsz << " unknowns." << std::endl;
+    std::cout << " * Matrix fill: " << 100.0*double(nnz)/(systsz*systsz) << "%" << std::endl;
+    tc.tic();
     solver.analyzePattern(assembler_nopre.matrix);
+    tc.toc();
+    std::cout << " * analyzePattern " << tc << " seconds." << std::endl;
+    tc.tic();
     solver.factorize(assembler_nopre.matrix);
+    tc.toc();
+    std::cout << " * factorize " << tc << " seconds." << std::endl;
+    tc.tic();
     dynamic_vector<scalar_type> X = solver.solve(assembler_nopre.rhs);
+    tc.toc();
+    std::cout << " * solve " << tc << " seconds." << std::endl;
+    //std::cout << "Solver time: " << tc << " seconds." << std::endl;
+
+    tc.tic();
+
     face_basis_type face_basis(degree);
     size_t fbs = face_basis.size();
 
@@ -146,6 +194,10 @@ bool SOLVE(MeshType & msh,   /* handle to the mesh */
                         face_quadrature_type> projk(degree);
 
     std::ofstream ofs( directory + "/plotnew.dat");
+
+    auto col_range  =   cb.range(1,degree+1);
+    auto row_range  =   disk::dof_range(0,mesh_type::dimension);
+
     for (auto& cl : msh)
     {
         auto fcs = faces(msh, cl);
@@ -172,7 +224,7 @@ bool SOLVE(MeshType & msh,   /* handle to the mesh */
 
         dynamic_matrix<scalar_type> loc = factor*(gradrec_nopre.data + stab_nopre.data);
         auto cell_rhs = disk::compute_rhs<cell_basis_type, cell_quadrature_type>(msh, cl, solution.f, degree);
-        auto cell_id  = msh.lookup(cl);
+        auto cell_id  = cl.get_id();
         plasticity.compute(msh, cl, gradrec_nopre.oper, Uh_Th.at(cell_id), tsr_vec.at(cell_id));
         dynamic_vector<scalar_type>   x = statcond_pst.recover(msh, cl, loc, cell_rhs, xFs, plst_switch * plasticity.rhs);
 
@@ -185,6 +237,7 @@ bool SOLVE(MeshType & msh,   /* handle to the mesh */
         //_____________________________________________________________________
         cell_basis_type         cell_basis(degree);
         auto qps_1 = cq.integrate(msh, cl);
+
         for (auto& qp : qps_1)
         {
             auto phi  = cell_basis.eval_functions(msh, cl, qp.point());
@@ -195,12 +248,10 @@ bool SOLVE(MeshType & msh,   /* handle to the mesh */
                 pot += phi[i] * x(i);
 
             vector_type dpot;
-            auto col_range  =   cb.range(1,degree+1);
-            auto row_range  =   disk::dof_range(0,mesh_type::dimension);
             matrix_type dphi_matrix =   disk::make_gradient_matrix(dphi);
             matrix_type dphi_taken  =   take(dphi_matrix, row_range, col_range);
-            matrix_type dphi_rec_uh =   dphi_taken * gradrec_nopre.oper*x;
-            dpot = dphi_rec_uh;
+            matrix_type dphi_ruh =   dphi_taken * rec.tail(cb.size()-1);
+            dpot = dphi_ruh;
 
             auto potr  = solution.sf(qp.point());
             vector_type dpotr = solution.df(qp.point());
@@ -214,9 +265,10 @@ bool SOLVE(MeshType & msh,   /* handle to the mesh */
             err_fun  += diff;
             err_dfun += d_diff;
             auto tp = qp.point();
-            for (size_t i = 0; i < mesh_type::dimension; i++)
-                ofs << tp[i] << " ";
-            ofs << pot << " " << std::abs(pot - solution.sf(tp)) << std::endl;
+
+            //for (size_t i = 0; i < mesh_type::dimension; i++)
+            //    ofs << tp[i] << " ";
+            //ofs << pot << " " << std::abs(pot - solution.sf(tp)) << std::endl;
         }
 
         dynamic_vector<scalar_type> true_dof = projk.compute_cell(msh, cl, solution.sf);
@@ -225,7 +277,7 @@ bool SOLVE(MeshType & msh,   /* handle to the mesh */
         err_dof += diff_dof.dot(projk.cell_mm * diff_dof);
         //_____________________________________________________________________
 
-
+        #if 0
         auto test_points = make_test_points(msh, cl);
         for (size_t itp = 0; itp < test_points.size(); itp++)
                 //for (auto& qp : qps)
@@ -244,27 +296,30 @@ bool SOLVE(MeshType & msh,   /* handle to the mesh */
                 //ofs << tp[i] << " ";
             //ofs << pot << " " << pot << std::endl;
         }
-
+        #endif
         cell_quadrature_type    cq2(quad_degree);
 
         auto qps = cq2.integrate(msh, cl);
         size_t col = 0;
+
         for (auto& qp : qps)
         {
-            auto gamma      =   tsr_vec[cell_id].gamma.col(col);
+            vector_type gamma      =   tsr_vec.at(cell_id).gamma.col(col);
             auto dphi       =   cb.eval_gradients(msh, cl, qp.point());
-            auto col_range  =   cb.range(1,degree+1);
-            auto row_range  =   disk::dof_range(0,mesh_type::dimension);
 
             matrix_type dphi_matrix =   disk::make_gradient_matrix(dphi);
             matrix_type dphi_taken  =   take(dphi_matrix, row_range, col_range);
-            matrix_type dphi_rec_uh =   dphi_taken * gradrec_nopre.oper*x;
+            vector_type dphi_ruh    =   dphi_taken * rec.tail(cb.size()-1);
 
-            gamma_error  += ((gamma - dphi_rec_uh).cwiseProduct(gamma - dphi_rec_uh)).sum();
+            gamma_error  += (gamma - dphi_ruh).dot(gamma - dphi_ruh);
             col++;
         }
 
     }
+
+    tc.toc();
+    //std::cout << "Recovering U and error : "<< tc << " seconds." << std::endl;
+    tc.tic();
 
     ofs.close();
 
@@ -289,6 +344,8 @@ bool SOLVE(MeshType & msh,   /* handle to the mesh */
 
     auto DIM = mesh_type::dimension;
 
+    tc.toc();
+    //std::cout << "Others : "<< tc << " seconds." << std::endl;
 
     if( solution.is_exact)
     {
@@ -376,7 +433,8 @@ bool SOLVE(MeshType & msh,   /* handle to the mesh */
 
 };
 
-template<typename Storage, typename TensorsType, typename T, typename LoaderType>
+template<typename Storage, typename TensorsType, typename T, typename LoaderType,
+         typename Solution>
 bool
 ADAPTATION( disk::mesh<T,2,Storage>  & msh,
            std::vector<size_t>      & levels_vec,
@@ -391,7 +449,8 @@ ADAPTATION( disk::mesh<T,2,Storage>  & msh,
            const size_t elems_1d,
            const size_t degree,                         /* degree of the method */
            const size_t imsh,
-           const LoaderType& loader)
+           const LoaderType& loader,
+           const Solution& solution)
 {
     typedef disk::mesh<T,2,Storage>                    mesh_type;
     typedef typename mesh_type::cell                   cell_type;
@@ -420,12 +479,13 @@ ADAPTATION( disk::mesh<T,2,Storage>  & msh,
         disk::stress_based_mesh<mesh_type>  sbm(msh, levels_vec, hanging_nodes, imsh);
         if( imsh > 0)
         {
-            bool do_refinement = sbm.marker(msh, tsr_vec, pst.yield, directory, info);//, percent);
-            //auto do_refinement = sbm.template marker<cell_basis_type, cell_quadrature_type,
-            //                                         face_basis_type, face_quadrature_type,
-            //                                         gradrec_type>
-            //                     (msh, tsr_vec, pst.yield, directory, info, percent, Uh_Th, pst, degree);
-
+            //bool do_refinement = sbm.marker(msh, tsr_vec, pst.yield, directory, info, percent);
+            //#if 0
+            auto do_refinement = sbm.template marker<cell_basis_type, cell_quadrature_type,
+                                                     face_basis_type, face_quadrature_type,
+                                                     gradrec_type, Solution>
+                                 (msh, tsr_vec, pst, directory, info, percent, Uh_Th, degree, solution);
+            //#endif
             if(!do_refinement)
                 return false;
 
@@ -682,13 +742,18 @@ int main (int argc, char** argv )
 
         for( size_t imsh = 0; imsh < num_remesh + 1; imsh++)
         {
+            timecounter tc;
 
             std::string er_iters_name, er_steps_name;
 
             std::cout << "_iter_hanging_nodes "<< hanging_nodes << std::endl;
+
+
             bool refine = ADAPTATION(msh, levels_vec, er_iters_name, er_steps_name,
                              dir_name , tsr_vec, Uh_Th, pst,  call_mesher,
-                             hanging_nodes, elems_1d, degree, imsh,loader);
+                             hanging_nodes, elems_1d, degree, imsh,loader,solution);
+            tc.toc();
+            std::cout << "ADAPTATION total time: " << tc << " seconds." << std::endl;
 
             if( !refine && imsh > 0)
                 break;
@@ -713,8 +778,14 @@ int main (int argc, char** argv )
                     break;
             }
             std::string msh_str =  to_string(imsh);
+
+            tc.tic();
             auto er = disk::plasticity_post_processing(msh, solution.sf,solution.df,
                       tsr_vec, Uh_Th, pst, dir_name, degree, tfs, msh_str, hanging_on, elems_1d);
+            tc.toc();
+            std::cout << "post_processing total time: " << tc << " seconds." << std::endl;
+
+
             std::cout << "************* END Refinement No. "<< imsh <<"****************"<<  std::endl;
 
             ifs.close();
