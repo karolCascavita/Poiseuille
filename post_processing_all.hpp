@@ -613,7 +613,7 @@ public:
         for(auto& cel : msh)
         {
             size_t qp_cont = 0;
-            auto cell_id   = msh.lookup(cel);
+            auto cell_id   = cel.get_id();
             auto cell_quadpoints     =  cq.integrate(msh, cel);
             auto cqs  = cell_quadpoints.size();
             auto pts  = points(msh,cel);
@@ -724,7 +724,7 @@ public:
         for(auto& cel : msh)
         {
             size_t qp_cont = 0;
-            auto cell_id   = msh.lookup(cel);
+            auto cell_id   = cel.get_id();
             auto cell_quadpoints     =  cq.integrate(msh, cel);
             auto cqs  = cell_quadpoints.size();
             auto pts  = points(msh,cel);
@@ -938,7 +938,6 @@ private:
             matrix_type mass_matrix = matrix_type::Zero(cb1.size(), cb1.size());
             vector_type u_rhs       = vector_type::Zero(cb1.size()) ;
 
-            gradrec_nopre.compute(msh, cl);
             auto quadpoints =  special_integrate(lp, rp, m_quadrature_data);
 
             for (auto& qp : quadpoints)
@@ -985,6 +984,8 @@ private:
 
                 for (size_t i = 0; i < cb1.size(); i++)
                     uh_T  += phi[i] * xT(i);
+
+                gradrec_nopre.compute(msh, cl);
 
                 matrix_type dphi_matrix =   make_gradient_matrix(dphi);
                 matrix_type dphi_taken  =   take(dphi_matrix, row_range, col_range);
@@ -1125,7 +1126,7 @@ private:
             auto i = 0, j = 0;
             auto r_yield  = m_pst.Bn*m_pst.Lref;
             std::cout << "r_yield = "<< r_yield << std::endl;
-            std::cout << "cl      = "<< msh.lookup(cl) << std::endl;
+            std::cout << "cl      = "<< cl.get_id() << std::endl;
             std::cout << "cl_pts.size = "<< cl_pts.size() << std::endl;
 
             for(auto& fc : fcs)
@@ -1322,7 +1323,7 @@ plasticity_post_processing( mesh<T,DIM,Storage>&  msh,
 
     for (auto& cl : msh)
     {
-        auto id =   msh.lookup(cl);
+        auto id =   cl.get_id();
         auto x  =   Uh_Th.at(id);
         stress_based_errors<T,DIM,Storage,cell_quad_type>   sber(pst,degree);
         //sber.integrate<LoaderType>(msh,cl,sf,df,x,er);
@@ -1379,7 +1380,7 @@ plasticity_post_processing( mesh<T,DIM,Storage>&  msh,
 
     for(auto& cl:msh)
     {
-        size_t id  = msh.lookup(cl);
+        size_t id  = cl.get_id();
         siglam_Th.at(id)  = tsr_vec.at(id).siglam;
         gamma_Th.at(id)   = tsr_vec.at(id).gamma;
         xi_norm_Th.at(id) = tsr_vec.at(id).xi_norm;
@@ -1399,7 +1400,7 @@ plasticity_post_processing( mesh<T,DIM,Storage>&  msh,
     pp.tensor_norm_vtk_writer(msh, xi_funct_file,   quad_degree, xi_function);
     pp.gauss_points_to_matlab(msh, gauss_pts_file + ".m",   quad_degree, xi_function, info);
 
-    auto xi_norm_vec = get_tensor<TensorsType,T>(tsr_vec, "xi_norm");
+    //auto xi_norm_vec = get_tensor<TensorsType,T>(tsr_vec, "xi_norm");
     //save_data(xi_norm_vec, directory + "/save_data.txt");
     return er;
 };
