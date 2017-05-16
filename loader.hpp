@@ -125,6 +125,8 @@ public:
             pts[0] = point_identifier<1>(i);
             pts[1] = point_identifier<1>(i+1);
             e.set_point_ids(pts.begin(), pts.end());
+            auto id = typename edge_type::id_type(i);
+            e.set_element_id(id);
 
             storage->edges.at(i) = e;
         }
@@ -171,9 +173,13 @@ public:
     std::vector<polygon<10>>                        m_decagons;
     std::vector<polygon<11>>                        m_hendecagons;
     std::vector<polygon<12>>                        m_dodecagons;
+    std::vector<polygon<13>>                        m_triadecagons;
+    std::vector<polygon<14>>                        m_tesseradecagons;
+    std::vector<polygon<15>>                        m_pentadecagons;
 
     std::vector<std::array<ident_impl_t, 2>>        m_boundary_edges;
     std::vector<std::array<ident_impl_t, 4>>        m_edges;
+    std::vector<int> m_index_transf;
 
     //std::vector<std::set<typename edge_type::id_type>>      m_edge_node_connectivity;
 private:
@@ -227,6 +233,7 @@ private:
         std::ifstream   ifs(filename);
         std::string     keyword;
 
+        std::cout << " filename : "<<filename  << std::endl;
         if (!ifs.is_open())
         {
             std::cout << "Error opening " << filename << std::endl;
@@ -277,6 +284,12 @@ private:
             fvca5_read_tuples(ifs, m_heptagons);
             ifs >> keyword;
         }
+        if ( keyword == "octagons" )
+        {
+            m_heptagons.clear();
+            fvca5_read_tuples(ifs, m_octagons);
+            ifs >> keyword;
+        }
 
         if ( keyword == "edges" )
         {
@@ -287,7 +300,7 @@ private:
         }
         else
         {
-            std::cout << "Error parsing FVCA5 file" << std::endl;
+            std::cout << "Error parsing FVCA5 file boundary" << std::endl;
             return false;
         }
 
@@ -299,7 +312,7 @@ private:
         }
         else
         {
-            std::cout << "Error parsing FVCA5 file" << std::endl;
+            std::cout << "Error parsing FVCA5 file edges" << std::endl;
             return false;
         }
 
@@ -329,18 +342,14 @@ private:
 
                 if (pt2 < pt1)
                     std::swap(pt1, pt2);
-                //std::cout << "/* message 3 */" << std::endl;
 
                 edge_type edge{{pt1, pt2}};
-                //std::cout << "/* message 4 */" << std::endl;
 
                 auto edge_id = find_element_id(storage->edges.begin(),
                                                storage->edges.end(), edge);
-                //std::cout << "/* message 5 */" << std::endl;
 
                 if (!edge_id.first)
                     throw std::invalid_argument("Edge not found (hanging nodes?)");
-                //std::cout << "/* message 6 */" << std::endl;
 
                 surface_edges[i] = edge_id.second;
                 //std::cout << "/* message 7 */" << std::endl;
@@ -354,6 +363,88 @@ private:
             surfedg.push_back( surface );
         }
 
+    }
+    template<typename ElementType>
+    void
+    index_transf(const std::vector<ElementType>& elements)
+    {
+        std::vector<int> index(elements.size(), 0);
+        for(int i = 0 ; i != index.size() ; i++)
+            index.at(i) = i;
+
+        std::sort(index.begin(), index.end(),[&](const int& a, const int& b)
+            {
+                surface_type s1  = elements.at(a);
+                surface_type s2  = elements.at(b);
+                return (s1 < s2);
+            }
+        );
+        m_index_transf = index;
+        std::cout << "INDEX_TRANSF:" << std::endl;
+        for(auto& id: index)
+            std::cout << id<<"  ";
+        std::cout<< std::endl;
+    }
+    std::pair<bool, std::vector<typename point_type::id_type>>
+    is_special_polygon(const mesh_type& msh, const surface_type& cl)
+    {
+        auto pts  = points(msh,cl);
+        auto nonc_pts = pts;
+         auto fcs = faces(msh, cl);
+         std::vector<std::array<T,2>> ns(fcs.size());
+         size_t i = 0;
+         for(auto& fc : fcs)
+         {
+             auto n = normal(msh,cl,fc);
+             ns.at(i)[0] = n(0);
+             ns.at(i)[1] = n(1);
+             i++;
+         }
+        std::sort(ns.begin(), ns.end());
+        auto uniq_iter = std::unique(ns.begin(), ns.end(),[](std::array<T,2>& l, std::array<T,2>& r)
+            {return std::sqrt(std::pow((l[0] - r[0]),2.) + std::pow((l[1] - r[1]),2.)) < 1.e-10; });
+        ns.erase(uniq_iter, ns.end());
+         //Identify vertices
+         std::vector<typename point_type::id_type> vertices(ns.size());
+         auto num_pts = pts.size();
+         size_t vcount = 0;
+         for(size_t i = 0; i < num_pts; i++)
+         {
+             size_t idx = (i == 0)? num_pts - 1 : i - 1 ;
+             auto pb = pts.at(idx);
+             auto p  = pts.at(i);
+             auto pf = pts.at((i + 1) % num_pts);
+
+             auto u  = (pb - p).to_vector();
+             auto v  = (pf - p).to_vector();
+             auto uxv_norm = cross(u, v).norm();
+
+             if(uxv_norm > 1.e-10)
+                 vertices.at(vcount++) =  typename point_type::id_type(i);
+         }
+        if(vcount != ns.size())
+             std::logic_error(" Incorrect procedure to find vertices");
+
+        bool has_hang_nodes(false);
+        if(vertices.size() != pts.size())
+            has_hang_nodes = true;
+
+        return std::make_pair(has_hang_nodes, vertices);
+    }
+    /*Set boundary number*/
+    template<typename EdgeType, typename Storage>
+    size_t
+    set_bnd_number(const EdgeType& edge, const Storage& storage)
+    {
+        T x0 = 0.5;
+        auto pts_ids  = edge.point_ids();
+        auto p1   = storage->points.at(pts_ids.at(0));
+        auto p2   = storage->points.at(pts_ids.at(1));
+
+        if( p1.x() <= x0 && p2.x() <= x0 )
+            return 1;
+        else
+            return 2;
     }
     #if 0
     set_neighbors(mesh_type& msh, m_edges, std::vector<surface_type>& surfaces);
@@ -418,15 +509,17 @@ public:
                 std::swap(node1, node2);
 
             auto e = edge_type{{node1, node2}};
-            e.set_point_ids(m_edges[i].begin(), m_edges[i].begin()+2); /* XXX: crap */
+            e.set_point_ids(m_edges[i].begin(), m_edges[i].begin() + 2); /* XXX: crap */
             edges.push_back(e);
 
+            auto pts_ids  = e.point_ids();
         }
         /* Sort them */
         std::sort(edges.begin(), edges.end());
 
         /* Detect which ones are boundary edges */
         storage->boundary_edges.resize(m_edges.size());
+        storage->boundary_info.resize(m_edges.size());
         for (size_t i = 0; i < m_boundary_edges.size(); i++)
         {
             auto node1 = typename node_type::id_type(m_boundary_edges[i][0]);
@@ -436,15 +529,18 @@ public:
                 std::swap(node1, node2);
 
             auto e = edge_type{{node1, node2}};
-
             auto position = find_element_id(edges.begin(), edges.end(), e);
-
+            auto edge = *next(edges.begin(), position.second);
             if (position.first == false)
             {
                 std::cout << "Bad bug at " << __FILE__ << "("
                           << __LINE__ << ")" << std::endl;
                 return false;
             }
+
+            auto bnd_number = set_bnd_number(edge, storage);
+            bnd_info bi{bnd_number, true};
+            storage->boundary_info.at(position.second)  = bi;
             storage->boundary_edges.at(position.second) = true;
         }
         //std::cout << "/* boundary_edges */" << std::endl;
@@ -467,7 +563,11 @@ public:
                           m_enneagons.size() +
                           m_decagons.size()  +
                           m_hendecagons.size() +
-                          m_dodecagons.size());
+                          m_dodecagons.size() +
+                          m_triadecagons.size()  +
+                          m_pentadecagons.size() +
+                          m_tesseradecagons.size())
+                          ;
 
         //std::cout << "/* message Put Polygons*/" << std::endl;
         //std::cout << "/* triangles */" << std::endl;
@@ -502,10 +602,36 @@ public:
         put_polygons(msh, m_dodecagons, surfaces);
         m_dodecagons.clear();
 
+        put_polygons(msh, m_triadecagons, surfaces);
+        m_triadecagons.clear();
+
+        put_polygons(msh, m_tesseradecagons, surfaces);
+        m_tesseradecagons.clear();
+
+        put_polygons(msh, m_pentadecagons, surfaces);
+        m_pentadecagons.clear();
+
+        index_transf(surfaces);
+
         std::sort(surfaces.begin(), surfaces.end());
+
+        for(size_t i = 0; i < surfaces.size(); i++)
+        {
+            auto id = typename surface_type::id_type(i);
+            (surfaces.at(i)).set_element_id(id);
+        }
 
         storage->surfaces = std::move(surfaces);
 
+        /* Detect which surfaces have hanging nodes */
+        storage->special_surfaces.resize(storage->surfaces.size());
+        for (size_t i = 0; i < storage->surfaces.size(); i++)
+        {
+            auto s = storage->surfaces.at(i);
+            auto p = is_special_polygon(msh, s);
+
+            storage->special_surfaces.at(i) = p;
+        }
         //std::cout << "/* message Print stats*/" << std::endl;
         /* Print stats */
         storage->statistics();
