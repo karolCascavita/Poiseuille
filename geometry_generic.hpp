@@ -73,7 +73,7 @@ std::vector<typename generic_mesh<T, DIM>::face>
 faces(const generic_mesh<T, DIM>& msh, const typename generic_mesh<T, DIM>::cell& cl)
 {
     auto id_to_face = [&](const typename generic_mesh<T, DIM>::face::id_type& id) -> auto {
-        return *(msh.faces_begin() + size_t(id));
+        return *std::next(msh.faces_begin(), size_t(id));
     };
 
     std::vector<typename generic_mesh<T, DIM>::face> ret;
@@ -120,7 +120,7 @@ face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
 
         if (itor != fcs.end() && !(fc < *itor))
         {
-            auto cl_id = msh.lookup(cl);
+            auto cl_id = cl.get_id();
             ret.push_back(cl_id);
         }
     }
@@ -170,14 +170,14 @@ face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
     }
     else
     {
-        auto cell_id = msh.lookup(cell);
+        auto cell_id =cell.get_id();
 
         for(auto& cl : msh)
         {
             auto fcs   = faces(msh,cl);
             std::sort(fcs.begin(), fcs.end());
             auto itor  = std::lower_bound(fcs.begin(), fcs.end(), face);
-            auto neighbor_id = msh.lookup(cl);
+            auto neighbor_id = cl.get_id();
 
             if( itor != fcs.end() && !(face < *itor) && (neighbor_id != cell_id))
                 return neighbor_id;
@@ -190,7 +190,7 @@ face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
 
 template<typename T, size_t DIM>
 void
-borrar(const generic_mesh<T, DIM>& msh)
+check_older_msh(const generic_mesh<T, DIM>& msh)
 {
     auto storage = msh.backend_storage();
     auto points  = storage ->points;
@@ -308,65 +308,18 @@ measure(const generic_mesh<T,1>& msh, const typename generic_mesh<T,1>::face& fc
     return T(1);
 }
 
-template<typename T>
-T
-diameter(const generic_mesh<T,2>& msh, const typename generic_mesh<T,2>::cell& cl)
+template<typename Mesh, typename Element>
+typename Mesh::scalar_type
+diameter(const Mesh& msh, const Element& elem)
 {
+    auto pts = points(msh, elem);
 
-    T c_meas = measure(msh, cl);
-    T af_meas = T(0);
-    auto fcs = faces(msh, cl);
-    for (auto& f : fcs)
-        af_meas += measure(msh, f);
+    typename Mesh::scalar_type diam = 0.;
 
-    return c_meas/af_meas;
+    for (size_t i = 0; i < pts.size(); i++)
+        for (size_t j = i+1; j < pts.size(); j++)
+            diam = std::max((pts[i] - pts[j]).to_vector().norm(), diam);
 
-    /*
-    auto bar = barycenter(msh, cl);
-    auto pts = points(msh, cl);
-
-    T diam = 0.;
-
-    for (auto& pt : pts)
-    {
-        auto d = (pt-bar).to_vector().norm();
-        diam = std::max(d, diam);
-    }
-
-    return diam;
-    */
-}
-
-template<typename T>
-T
-diameter(const generic_mesh<T,2>& msh, const typename generic_mesh<T,2>::face& fc)
-{
-    return measure(msh, fc);
-}
-
-template<typename T>
-T
-diameter(const generic_mesh<T,1>& msh, const typename generic_mesh<T,1>::cell& cl)
-{
-    return measure(msh, cl);
-}
-
-template<typename T>
-T
-diameter(const generic_mesh<T,1>&, const typename generic_mesh<T,1>::face&)
-{
-    return 1.;
-}
-template<typename T,  size_t DIM>
-T
-diameter(const generic_mesh<T,DIM>& msh)
-{
-    T diam = T(0);
-    for(auto& cl : msh)
-    {
-        auto cl_diam = diameter(msh, cl);
-        diam = std::max(diam, cl_diam);
-    }
     return diam;
 }
 /* Compute the barycenter of a 2-face */

@@ -56,9 +56,11 @@ struct generic_element_traits<generic_element<DIM, DIM>>
 template<typename T>
 class generic_element_base
 {
+    typedef typename generic_element_traits<T>::id_type                     id_type;
     typedef typename generic_element_traits<T>::subelement_type::id_type    sub_id_type;
     typedef point_identifier<generic_element_traits<T>::dimension>          point_id_type;
 protected:
+    id_type                             m_element_id;
     std::vector<sub_id_type>            m_sids_ptrs;
     std::vector<point_id_type>          m_pts_ptrs;
 public:
@@ -120,6 +122,21 @@ public:
         return m_sids_ptrs;
         //std::cout << "/* point_ids function*/" << std::endl;
     }
+
+
+    void set_element_id(const id_type id)
+    {
+        m_element_id = id;
+    }
+
+    id_type
+    get_id(void) const
+    {
+        //assert( m_element_id < 0 );
+        return m_element_id;
+    }
+
+
     sid_iterator        subelement_id_begin() { return m_sids_ptrs.begin(); }
     sid_iterator        subelement_id_end()   { return m_sids_ptrs.end(); }
     const_sid_iterator  subelement_id_begin() const { return m_sids_ptrs.begin(); }
