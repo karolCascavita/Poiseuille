@@ -24,18 +24,6 @@
 
 namespace disk {
 
-template<typename T,size_t DIM>
-std::string
-directory(const T& Bi, const std::string& name)
-{
-    auto Bi_str  = tostr(int(10* Bi));
-    auto DIM_str = tostr(DIM);
-
-    std::string dir_name    =   name + "/" + DIM_str + "D_Bi" + Bi_str;
-    std::cout << "dir_name  = "<< dir_name << std::endl;
-    return dir_name;
-}
-
 template<typename T>
 struct plasticity_data
 {
@@ -1296,7 +1284,7 @@ public:
         for(size_t i = 0, j = offset; i < num_faces; i++, j++)
         {
             //std::cout << "j = "<< j<< std::endl;
-            auto face   = *std::next(msh.faces_begin(), i);
+            auto face   = fcs.at(i);
             auto fbar   = barycenter(msh, face);
             auto dphi   = cell_basis.eval_gradients(msh, cl, fbar);
             matrix_type dphi_matrix = make_gradient_matrix(dphi);

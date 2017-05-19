@@ -589,65 +589,7 @@ public:
         }
         ofs.close();
     }
-    template<typename TensorMatrix>
-    void
-    quiver_matlab(const mesh_type& msh,
-                  const std::string& filename,
-                  const size_t quad_degree,
-                  const std::vector<TensorMatrix> & global_tensor)
-    {
-        typedef typename mesh_type::cell                     cell_type;
-        typedef typename mesh_type::face                     face_type;
-        typedef disk::quadrature<mesh_type, cell_type>      cell_quad_type;
-        typedef disk::quadrature<mesh_type, face_type>      face_quad_type;
 
-        cell_quad_type cell_quadrature(quad_degree);
-        face_quad_type face_quadrature(quad_degree);
-
-        std::ofstream ofs(filename);
-        if (!ofs.is_open())
-            std::cout << "Error opening file"<<std::endl;
-
-        ofs << " hold on;"<<std::endl;
-        for (size_t i = 0; i < msh.cells_size(); i++ )
-        {
-            auto cl  = *std::next(msh.cells_begin(),i);
-            auto pts = points(msh, cl);
-            auto b   = barycenter(msh,cl);
-            auto id  = msh.lookup(cl);
-            auto fcs = faces(msh, cl);
-            auto cqs = cell_quadrature.integrate(msh, cl);
-            ofs << "pts = [";
-            for (auto& qp : cqs)
-            {
-                auto p = qp.point();
-                ofs << p.x() << "  "<< p.y() << std::endl;
-            }
-
-            for (auto fc : fcs)
-            {
-                auto fqs  = face_quadrature.integrate(msh, fc);
-                for (auto& qp : fqs)
-                {
-                    auto p = qp.point();
-                    ofs << p.x() << "  "<< p.y() << std::endl;
-                }
-            }
-            for (auto& p : pts)
-                ofs << p.x() << "  "<< p.y() << std::endl;
-            ofs << "];"<<std::endl;
-
-            TensorMatrix tensor = global_tensor.at(i);
-
-            ofs << "tau = [";
-            for(size_t i = 0; i < tensor.cols(); i++)
-                ofs<< tensor(0, i)<< " "<< tensor(1, i) <<std::endl;
-            ofs << "];"<<std::endl;
-
-            ofs << "quiver(pts(:,1),pts(:,2),tau(:,1),tau(:,2));"<< std::endl;
-        }
-        ofs.close();
-    }
 
     template<typename TensorMatrix>
     void tensor_norm_vtk_writer(const mesh_type& msh, const std::string& name, const size_t quad_degree,
@@ -869,10 +811,56 @@ public:
     }
 
 };
-template<typename T>
-struct errors
+
+template<typename MeshType, typename  TensorMatrix>
+void
+quiver_matlab(const MeshType& msh,
+              const std::string& filename,
+              const size_t quad_degree,
+              const std::vector<TensorMatrix> & global_tensor)
 {
-    errors():u_uh(0.), Iu_uh(0.), Du_Guh(0.)
+    typedef MeshType                           mesh_type;
+    typedef typename mesh_type::cell                    cell_type;
+    typedef typename mesh_type::face                    face_type;
+    typedef disk::quadrature<mesh_type, cell_type>      cell_quad_type;
+    typedef disk::quadrature<mesh_type, face_type>      face_quad_type;
+
+    cell_quad_type cell_quadrature(quad_degree);
+    face_quad_type face_quadrature(quad_degree);
+
+    std::ofstream ofs(filename);
+    if (!ofs.is_open())
+        std::cout << "Error opening file :"<< filename<<std::endl;
+
+    ofs << " hold on;"<<std::endl;
+    for (size_t i = 0; i < msh.cells_size(); i++ )
+    {
+        auto cl  = *std::next(msh.cells_begin(),i);
+        auto num_pts  =  global_tensor.at(i).cols();
+        auto pts_to_eval = new_points(msh, cl, quad_degree, num_pts);
+
+        ofs << "pts = [";
+        for (auto& p : pts_to_eval)
+            ofs << p.x() << "  "<< p.y() << std::endl;
+        ofs << "];"<<std::endl;
+
+        TensorMatrix tensor = global_tensor.at(i);
+
+        ofs << "tau = [";
+        for(size_t i = 0; i < tensor.cols(); i++)
+            ofs<< tensor(0, i)<< " "<< tensor(1, i) <<std::endl;
+        ofs << "];"<<std::endl;
+
+        ofs << "quiver(pts(:,1),pts(:,2),tau(:,1),tau(:,2));"<< std::endl;
+    }
+    ofs.close();
+}
+
+
+template<typename T>
+struct solution_errors
+{
+    solution_errors():u_uh(0.), Iu_uh(0.), Du_Guh(0.)
     {}
     T  u_uh;
     T Iu_uh;
@@ -917,7 +905,7 @@ class stress_based_errors<T,1,Storage,CellQuadType>
                     const Solution  &   sf,
                     const Gradient  &   df,
                     const vector_type&  x,
-                    errors<scalar_type>& er)
+                    solution_errors<scalar_type>& er)
         {
             T  xc = m_pst.Lref / 2.0  -  m_pst.yield * m_pst.f;
             auto pts = points(msh, cl);
@@ -976,7 +964,7 @@ private:
                 const point<T,1>&   lp,
                 const point<T,1>&   rp,
                 const vector_type&  x,
-                errors<scalar_type>& er)
+                solution_errors<scalar_type>& er)
         {
 
             typedef typename mesh_type::face             face_type;
@@ -1246,7 +1234,7 @@ private:
                     const Solution  &   sf,
                     const Gradient  &   df,
                     const vector_type&  x,
-                    errors<scalar_type>& er)
+                    solution_errors<scalar_type>& er)
         {
             typedef point<T,2>          point_type;
 
@@ -1274,7 +1262,7 @@ private:
                 const Solution  &   solution,
                 const Gradient  &   gradient,
                 const vector_type&  x,
-                errors<scalar_type>& er)
+                solution_errors<scalar_type>& er)
         {
 
             typedef typename mesh_type::face             face_type;
@@ -1365,28 +1353,24 @@ private:
                     const Solution  &   sf,
                     const Gradient  &   df,
                     const vector_type&  x,
-                    errors<scalar_type>& er)
+                    solution_errors<scalar_type>& er)
         {
             int a;
         }
     };
 
 template<typename T, size_t DIM, typename Storage, typename TensorsType,
-            typename Function, typename Gradient>//, typename LoaderType>
-errors<T>
-plasticity_post_processing(const  mesh<T,DIM,Storage>&  msh,
-                            const Function &            sf,
-                            const Gradient &            df,
+            typename Solution>
+solution_errors<T>
+postprocess(const  mesh<T,DIM,Storage>&  msh,
+                            const Solution &     solution,
                             const std::vector<TensorsType> &    tsr_vec,
-                            std::vector<dynamic_vector<T>> &    Uh_Th,
+                            const std::vector<dynamic_vector<T>> &    Uh_Th,
                             const plasticity_data<T> &  pst,
-                            const std::string &         directory,
+                            const mesh_parameters<T>  &  mp,
                             const size_t                degree,
                             //std::ofstream &             efs,
-                            const std::string           msh_str,
-                            const std::string           info_ext,
-                            const bool                  hanging_on,
-                            const size_t                n)
+                            const size_t                imsh )
 
 {
     std::cout << "/* plasticity_post_processing */" << std::endl;
@@ -1398,7 +1382,10 @@ plasticity_post_processing(const  mesh<T,DIM,Storage>&  msh,
     typedef dynamic_vector<scalar_type>                 vector_type;
     typedef dynamic_matrix<scalar_type>                 matrix_type;
 
-    errors<scalar_type> er;
+    solution_errors<scalar_type> er;
+
+    std::string  msh_str = tostr(imsh);
+
 
     for (auto& cl : msh)
     {
@@ -1406,7 +1393,7 @@ plasticity_post_processing(const  mesh<T,DIM,Storage>&  msh,
         auto x  =   Uh_Th.at(id);
         stress_based_errors<T,DIM,Storage,cell_quad_type>   sber(pst,degree);
         //sber.integrate<LoaderType>(msh,cl,sf,df,x,er);
-        sber.integrate(msh,cl,sf,df,x,er);
+        sber.integrate(msh, cl, solution.sf, solution.df, x, er);
     }
 
     er.u_uh     = std::sqrt(er.u_uh);
@@ -1423,39 +1410,34 @@ plasticity_post_processing(const  mesh<T,DIM,Storage>&  msh,
     #endif
     post_processing<T,DIM,Storage> pp;
 
-    auto Bi_str     =   tostr(int(10 * pst.Bn));
-    auto n_str      =   tostr(n);
-    auto method_str =   (pst.method)? tostr(1): tostr(2);
-    auto hanging_str =  (hanging_on)? tostr(1): tostr(0);
-    auto alpha_str  =   tostr(int(pst.alpha));
-    std::cout << "!!!!!!!! alpha_str = "<< alpha_str<<"   ; alpha = "<< pst.alpha <<std::endl;
-    auto info =  "_n" + n_str+ "_g"+ hanging_str + "_rm" + msh_str
-                                 + "_m" + method_str + "_a" + alpha_str;
-    auto other_info =  "_Bi" + Bi_str + info;
+    auto info =  mp.summary + "_R" + msh_str;
 
-    std::cout << "other_info = "<< other_info << std::endl;
     std::string constraint_file;
     if (pst.method == true)
-        constraint_file = directory + "/lambda" + other_info;
+        constraint_file = mp.directory + "/lambda" + info;
     else
-        constraint_file = directory + "/sigma"+ other_info;
+        constraint_file = mp.directory + "/sigma"+ info;
 
-    std::string solution_file  = directory + "/solution" + other_info;
-    std::string gamma_file     = directory + "/gamma" + other_info;
-    std::string xi_norm_file   = directory + "/xi_norm" + other_info;
-    std::string xi_funct_file  = directory + "/xi_function" + other_info;
-    std::string gauss_pts_file = directory + "/cell_gp" + other_info;
-    std::string quiver_gamma_file = directory + "/quiver_gamma" + other_info;
-    std::string quiver_sigma_file = directory + "/quiver_sigma" + other_info;
-    std::string quiver_sigma_agamma_file = directory + "/quiver_sigma_agamma" + other_info;
+    std::string solution_file  = mp.directory + "/solution" + info;
+    std::string gamma_file     = mp.directory + "/gamma"    + info;
+    std::string xi_norm_file   = mp.directory + "/xi_norm"  + info;
+    std::string xi_funct_file  = mp.directory + "/xi_function" + info;
+    std::string gauss_pts_file = mp.directory + "/cell_gp"  + info;
+    std::string quiver_gamma_file = mp.directory + "/quiver_gamma" + info;
+    std::string quiver_sigma_file = mp.directory + "/quiver_sigma" + info;
+    std::string quiver_sigma_agamma_file = mp.directory + "/quiver_sigma_agamma" + info;
 
     pp.paraview(msh, solution_file, degree, Uh_Th);
 
     typedef std::vector<Eigen::Matrix<T,Eigen::Dynamic, Eigen::Dynamic>>  dyn_mat_vec;
-    dyn_mat_vec     siglam_Th(msh.cells_size()), gamma_Th(msh.cells_size()), xi_norm_Th(msh.cells_size()), xi_function(msh.cells_size());
-    dyn_mat_vec     diff_sig_agam(msh.cells_size());
     typedef Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>     tensor_matrix;
-    tensor_matrix vec;
+
+    dyn_mat_vec     siglam_Th(msh.cells_size());
+    dyn_mat_vec     gamma_Th(msh.cells_size());
+    dyn_mat_vec     xi_norm_Th(msh.cells_size());
+    dyn_mat_vec     xi_function(msh.cells_size());
+    dyn_mat_vec     diff_sig_agam(msh.cells_size());
+    tensor_matrix   vec;
 
     //WK: for p-adaptation quad_degree is not the same for all cells
     size_t quad_degree = tsr_vec.at(0).quad_degree;
@@ -1482,21 +1464,22 @@ plasticity_post_processing(const  mesh<T,DIM,Storage>&  msh,
     pp.tensor_norm_vtk_writer(msh, xi_norm_file,    quad_degree, xi_norm_Th);
     pp.tensor_norm_vtk_writer(msh, xi_funct_file,   quad_degree, xi_function);
     pp.gauss_points_to_matlab(msh, gauss_pts_file  + ".m",   quad_degree, xi_function, info);
-    pp.quiver_matlab(msh, quiver_sigma_agamma_file + ".m", quad_degree, diff_sig_agam);
-    pp.quiver_matlab(msh, quiver_sigma_file + ".m", quad_degree, siglam_Th);
-    pp.quiver_matlab(msh, quiver_gamma_file + ".m", quad_degree, gamma_Th);
+    quiver_matlab(msh, quiver_sigma_agamma_file + ".m", quad_degree, diff_sig_agam);
+    quiver_matlab(msh, quiver_sigma_file + ".m", quad_degree, siglam_Th);
+    quiver_matlab(msh, quiver_gamma_file + ".m", quad_degree, gamma_Th);
     //auto xi_norm_vec = get_tensor<TensorsType,T>(tsr_vec, "xi_norm");
 
-    auto info_other = info_ext + "_rm" + msh_str + ".txt";
-    save_data(Uh_Th, directory + "/Uh" + info_other);
+    //pp.quiver_matlab(msh, name, quad_degree, vec);
+
+    save_data(Uh_Th, mp.directory + "/Uh" + info + ".txt");
 
     std::vector<matrix_type> sigma;
     get_from_tensor(sigma,  tsr_vec, "sigma");
-    save_data(sigma, directory + "/Sigma" + info_other);
+    save_data(sigma, mp.directory + "/Sigma" + info + ".txt");
 
     std::vector<T> quadeg;
     get_from_tensor(quadeg,  tsr_vec, "quad_degree");
-    save_data(quadeg, directory + "/QuadDegree" + info_other);
+    save_data(quadeg, mp.directory + "/QuadDegree" + info +".txt");
 
     return er;
 };
