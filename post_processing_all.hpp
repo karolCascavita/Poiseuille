@@ -858,9 +858,9 @@ quiver_matlab(const MeshType& msh,
 
 
 template<typename T>
-struct errors
+struct solution_errors
 {
-    errors():u_uh(0.), Iu_uh(0.), Du_Guh(0.)
+    solution_errors():u_uh(0.), Iu_uh(0.), Du_Guh(0.)
     {}
     T  u_uh;
     T Iu_uh;
@@ -905,7 +905,7 @@ class stress_based_errors<T,1,Storage,CellQuadType>
                     const Solution  &   sf,
                     const Gradient  &   df,
                     const vector_type&  x,
-                    errors<scalar_type>& er)
+                    solution_errors<scalar_type>& er)
         {
             T  xc = m_pst.Lref / 2.0  -  m_pst.yield * m_pst.f;
             auto pts = points(msh, cl);
@@ -964,7 +964,7 @@ private:
                 const point<T,1>&   lp,
                 const point<T,1>&   rp,
                 const vector_type&  x,
-                errors<scalar_type>& er)
+                solution_errors<scalar_type>& er)
         {
 
             typedef typename mesh_type::face             face_type;
@@ -1234,7 +1234,7 @@ private:
                     const Solution  &   sf,
                     const Gradient  &   df,
                     const vector_type&  x,
-                    errors<scalar_type>& er)
+                    solution_errors<scalar_type>& er)
         {
             typedef point<T,2>          point_type;
 
@@ -1262,7 +1262,7 @@ private:
                 const Solution  &   solution,
                 const Gradient  &   gradient,
                 const vector_type&  x,
-                errors<scalar_type>& er)
+                solution_errors<scalar_type>& er)
         {
 
             typedef typename mesh_type::face             face_type;
@@ -1353,7 +1353,7 @@ private:
                     const Solution  &   sf,
                     const Gradient  &   df,
                     const vector_type&  x,
-                    errors<scalar_type>& er)
+                    solution_errors<scalar_type>& er)
         {
             int a;
         }
@@ -1361,7 +1361,7 @@ private:
 
 template<typename T, size_t DIM, typename Storage, typename TensorsType,
             typename Solution>
-errors<T>
+solution_errors<T>
 postprocess(const  mesh<T,DIM,Storage>&  msh,
                             const Solution &     solution,
                             const std::vector<TensorsType> &    tsr_vec,
@@ -1382,7 +1382,7 @@ postprocess(const  mesh<T,DIM,Storage>&  msh,
     typedef dynamic_vector<scalar_type>                 vector_type;
     typedef dynamic_matrix<scalar_type>                 matrix_type;
 
-    errors<scalar_type> er;
+    solution_errors<scalar_type> er;
 
     std::string  msh_str = tostr(imsh);
 

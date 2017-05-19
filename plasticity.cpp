@@ -141,6 +141,11 @@ public:
     std::vector<disk::tensors<T>>   tsr_vec;
     Eigen::SparseLU<Eigen::SparseMatrix<scalar_type>>    solver;
 
+    cell_basis_type         cb;
+    face_basis_type         fb;
+    cell_quadrature_type    cq;
+    cell_quadrature_type    cq_pst;
+
     plasticity_problem() = delete;
     plasticity_problem(const mesh_type& msh,
                        const size_t&     degree,
@@ -159,6 +164,11 @@ public:
         m_quad_degree = tsr_vec.at(0).quad_degree;
         std::cout << "m_quad_degree "<< m_quad_degree << std::endl;
         std::cout << "size tsr    "<<tsr_vec.at(0).xi_norm.rows()<< " x" << tsr_vec.at(0).xi_norm.cols()<< std::endl;
+
+        cb = cell_basis_type(m_degree + 1);
+        fb = face_basis_type(m_degree);
+        cq = cell_quadrature_type(2 * m_degree + 2);
+        cq_pst = cell_quadrature_type(m_quad_degree);
     }
     #if 0
     void
@@ -613,6 +623,181 @@ public:
         return;
     }
 
+    struct errors
+    {
+        errors(): dof(0.), fun(0.), dfun(0.), gamma(0.)
+        {}
+        T  dof;
+        T  fun;
+        T  dfun;
+        T  gamma;
+    };
+    template<typename Solution>
+    auto
+    compute_cell_error(errors& e,
+                       const mesh_type& msh, const cell_type& cl,
+                       const vector_type& x, const vector_type& ruh,
+                       const Solution& solution)
+    {
+        disk::projector_nopre<mesh_type,
+                            cell_basis_type,
+                            cell_quadrature_type,
+                            face_basis_type,
+                            face_quadrature_type> projk(m_degree);
+
+        auto col_range  = cb.range(1, m_degree + 1);
+        auto row_range  = disk::dof_range(0,mesh_type::dimension);
+        auto cell_id    = cl.get_id();
+
+        if( solution.is_exact)
+        {
+            auto qps = cq.integrate(msh, cl);
+            auto low_order_range = cb.range(0, m_degree);
+
+            for (auto& qp : qps )
+            {
+                auto phi  = cb.eval_functions(msh, cl, qp.point());
+                scalar_type pot = 0.0;
+                for (size_t i = 0; i < low_order_range.size(); i++)
+                    pot += phi[i] * x(i);
+
+                vector_type dpot;
+                auto dphi = cb.eval_gradients(msh, cl, qp.point());
+                matrix_type dphi_matrix =   disk::make_gradient_matrix(dphi);
+                matrix_type dphi_taken  =   disk::take(dphi_matrix, row_range, col_range);
+                matrix_type dphi_ruh =   dphi_taken * ruh;
+                dpot = dphi_ruh;
+
+                size_t number = 0;
+                auto potr  = solution.sf(qp.point(), number);
+                vector_type dpotr = solution.df(qp.point(), number);
+                scalar_type diff  = 0.0;
+                diff = (pot - potr) * (pot - potr) * qp.weight();
+
+                scalar_type d_diff = 0.0;
+                d_diff = (dpot - dpotr).dot(dpot - dpotr) * qp.weight();
+
+                e.fun  += diff;
+                e.dfun += d_diff;
+            }
+
+            dynamic_vector<scalar_type> true_dof = projk.compute_cell(msh, cl, solution.sf);
+            dynamic_vector<scalar_type> comp_dof = x.block(0,0,true_dof.size(), 1);
+            dynamic_vector<scalar_type> diff_dof = (true_dof - comp_dof);
+            e.dof += diff_dof.dot(projk.cell_mm * diff_dof);
+
+        }
+
+        auto qps_pst = cq_pst.integrate(msh, cl);
+        size_t col = 0;
+
+        for (auto& qp : qps_pst)
+        {
+            auto   dphi =  cb.eval_gradients(msh, cl, qp.point());
+            matrix_type dphi_matrix =   disk::make_gradient_matrix(dphi);
+            matrix_type dphi_taken  =   disk::take(dphi_matrix, row_range, col_range);
+            vector_type dphi_ruh    =   dphi_taken * ruh;
+
+            vector_type gamma =  tsr_vec.at(cell_id).gamma.col(col);
+            e.gamma  += qp.weight() * (gamma - dphi_ruh).dot(gamma - dphi_ruh);
+            col++;
+        }
+        return e;
+    }
+    template<typename BiformsType, typename Solution, typename MeshParameters>
+    auto
+    make_rhs_vector(const mesh_type&    msh,
+                    const BiformsType&  biforms,
+                    const Solution&     solution,
+                    const MeshParameters& mp,
+                    const scalar_type&  kappa,
+                    const scalar_type&  on_pst)
+    {
+        assembly_pst.initialize_rhs();
+
+        for(auto& cl: msh)
+        {
+            auto cell_id  = cl.get_id();
+            matrix_type rec_oper = biforms.at(cell_id).rec_oper;
+            matrix_type loc_mat  = biforms.at(cell_id).cell_lhs * kappa;
+            vector_type cell_rhs = biforms.at(cell_id).cell_rhs;
+            auto tsr = tsr_vec.at(cell_id);
+            vector_type pst_rhs;
+            if(mp.diff)  //Only for diffusion test
+                pst_rhs  = plasticity.compute(msh, cl, rec_oper, Uh_Th.at(cell_id), solution);
+            else         //Uncomment this for plasticity
+                pst_rhs = plasticity.compute(msh, cl, rec_oper, Uh_Th.at(cell_id), tsr);
+
+            //WK: if diffusion changes with domain, it would be mandatory to include mu here, to do it locally
+            vector_type Bc = statcond_pst.compute_rhs(msh, cl, loc_mat, cell_rhs,
+                                                                on_pst* pst_rhs);
+            assembly_pst.assemble_rhs(msh, cl, Bc);
+        }
+        assembly_pst.impose_boundary_conditions_rhs(msh, solution.sf);
+        vector_type X = solver.solve(assembly_pst.rhs);
+
+        return X;
+    }
+
+    template<typename BiformsType, typename Solution, typename MeshParameters>
+    auto
+    recover_solution(const mesh_type&    msh,
+                          const vector_type&  X,
+                          const BiformsType&  biforms,
+                          const Solution&     solution,
+                          const MeshParameters& mp,
+                          const scalar_type&  kappa,
+                          const scalar_type&  on_pst)
+    {
+        errors error;
+
+        auto col_range  =   cb.range(1, m_degree + 1);
+        auto row_range  =   disk::dof_range(0,mesh_type::dimension);
+        size_t  fbs     =   fb.size();
+
+        for (auto& cl : msh)
+        {
+            auto cell_id   = cl.get_id();
+            auto fcs_ids   = cl.faces_ids();
+            auto num_faces = fcs_ids.size();
+
+            vector_type xFs = vector_type::Zero(num_faces * fbs);
+
+            for (size_t face_i = 0; face_i < num_faces; face_i++)
+            {
+                auto face_id = fcs_ids.at(face_i);
+                vector_type xF = vector_type::Zero(fbs);
+                xF = X.block(face_id * fbs, 0, fbs, 1);
+                xFs.block(face_i * fbs, 0, fbs, 1) = xF;
+            }
+
+            matrix_type rec_oper = biforms.at(cell_id).rec_oper;
+            matrix_type loc_mat  = biforms.at(cell_id).cell_lhs * kappa;
+            vector_type cell_rhs = biforms.at(cell_id).cell_rhs;
+            vector_type pst_rhs;
+            if(mp.diff)  //Only for diffusion test
+                pst_rhs  = plasticity.compute(msh, cl, rec_oper, Uh_Th.at(cell_id), solution);
+            else         //Uncomment this for plasticity
+                pst_rhs  = plasticity.compute(msh, cl, rec_oper, Uh_Th.at(cell_id), tsr_vec.at(cell_id));
+
+            vector_type   x;
+            x = statcond_pst.recover(msh, cl, loc_mat, cell_rhs, xFs, on_pst * pst_rhs);
+            Uh_Th.at(cell_id)  = x;
+            vector_type ruh = rec_oper * x;
+
+            size_t number(1);
+            if(mp.diff)
+                number = disk::set_cell_number(msh, cl);
+
+            compute_cell_error(error, msh, cl, x, ruh, solution);
+        }
+        error.gamma    = std::sqrt(error.gamma);
+        error.dof      = std::sqrt(error.dof);
+        error.fun      = std::sqrt(error.fun);
+        error.dfun     = std::sqrt(error.dfun);
+
+        return error;
+    }
     template<typename Solution, typename MeshParameters>
     void
     test_plasticity(const mesh_type& msh,
@@ -625,12 +810,6 @@ public:
         scalar_type  kappa_pst  =  m_pst.alpha + m_pst.method * m_pst.mu;
         scalar_type  kappa_diff =  m_pst.mu;
 
-        cell_basis_type         cb(m_degree + 1);
-        face_basis_type         fb(m_degree);
-        cell_quadrature_type    cq(2 * m_degree + 2);
-        cell_quadrature_type    cq_pst(m_quad_degree);
-
-        std::cout << "RECYCLE : "<< mp.recycle << std::endl;
         if(!mp.recycle)
         {
             std::vector<dynamic_vector<scalar_type>>().swap(Uh_Th);
@@ -648,32 +827,22 @@ public:
         std::ofstream ifs(er_iters_name);
         std::ofstream tfs(er_steps_name, std::ios::app);
 
-        std::map<std::string, double> timings;
-        timecounter tc_detail, tc;
-
         //#if 0
         if (!ifs.is_open())
-            std::cout << "Error opening ifs"<<std::endl;
+            std::cout << "Error opening file :"<<er_iters_name <<std::endl;
         if (!tfs.is_open())
-            std::cout << "Error opening tfs"<<std::endl;
+            std::cout << "Error opening file :"<<er_steps_name <<std::endl;
 
         auto biforms = precompute_bilinear_forms(msh, solution);
 
         // Just to verify the projection of former solution in the first adaptation
-        //#if 0
         if(imsh == 1)
-        {
-            auto er = disk::postprocess(msh, solution, tsr_vec, Uh_Th, m_pst, mp,
-                                        m_degree, imsh + 80);
-        }
-        //#endif
-        //Iterations
+            auto er = disk::postprocess(msh, solution, tsr_vec, Uh_Th, m_pst, mp, m_degree, imsh + 80);
+
         for(size_t iter = 0; iter < m_max_iters ; iter++)
         {
             std::cout << "/* ____iter "<< imsh<<"-"<<iter<<"_____ */" << std::endl;
 
-            // This is intended when we are recicling the solution of former adaptation step.
-            //otherwise, turn off plasticity in the first Iteration
             size_t on_pst;
             if(mp.recycle)
                 on_pst = (!(iter == 0 && imsh == 0))? 1 : 0;
@@ -685,237 +854,36 @@ public:
                 on_pst    = 1; //This is only for test_diffusion;
                 kappa_pst = 1.; // WARNING!!!! solo para test diffusion
             }
-            std::cout << "on_ plasticity? : "<< on_pst << std::endl;
-
             scalar_type kappa = (on_pst) * kappa_pst + (1 - on_pst) * kappa_diff;
+            std::cout << "on_ plasticity? : "<< on_pst << std::endl;
+            std::cout << "kappa_diffusion : "<< kappa_diff << std::endl;
+            std::cout << "kappa_plasticity: "<< kappa_pst << std::endl;
+
             make_stiff_matrix(msh, kappa, biforms, iter);
+            vector_type X = make_rhs_vector(msh, biforms, solution, mp, kappa, on_pst);
+            auto error= recover_solution(msh, X, biforms, solution, mp, kappa, on_pst);
 
-            //#if 0
-            //tc.tic();
-            assembly_pst.initialize_rhs();
+            auto solver_conv = std::abs(error_ALG - error.gamma);
+            error_ALG      = error.gamma;
 
-            for(auto& cl: msh)
+            ifs<<tostr(iter) <<"  "<<error.gamma<<" "<<error.dof<<" "<<solver_conv<<std::endl;
+            std::cout << "L2-norm error, gamma - Du : " << error.gamma << std::endl;
+            std::cout << "L2-norm error, ierations  : " << solver_conv << std::endl;
+            std::cout << "L2-norm error, dof        : " << error.dof << std::endl;
+
+            if(error.gamma < 1.e-10)
             {
-                auto cell_id  = cl.get_id();
-                matrix_type rec_oper = biforms.at(cell_id).rec_oper;
-                matrix_type loc_mat  = biforms.at(cell_id).cell_lhs * kappa;
-                vector_type cell_rhs = biforms.at(cell_id).cell_rhs;
-                auto tsr = tsr_vec.at(cell_id);
-                vector_type pst_rhs;
-                if(mp.diff)  //Only for diffusion test
-                    pst_rhs  = plasticity.compute(msh, cl, rec_oper, Uh_Th.at(cell_id), solution);
-                else         //Uncomment this for plasticity
-                    pst_rhs = plasticity.compute(msh, cl, rec_oper, Uh_Th.at(cell_id), tsr);
-
-                //std::cout << "pst_rhs : [ "<< pst_rhs.transpose() << " ]"<< std::endl;
-                //WK: if diffusion changes with domain, it would be mandatory to include mu here, to do it locally
-                vector_type Bc = statcond_pst.compute_rhs(msh, cl, loc_mat, cell_rhs,
-                                                scalar_type(on_pst)* pst_rhs);
-                assembly_pst.assemble_rhs(msh, cl, Bc);
-                //std::cout << "Bc      : [ "<< Bc.transpose() << " ]"<< std::endl;
-            }
-
-            #if 0
-            tc.tic();
-            std::vector<vector_type> rhs_vec(msh.cells_size());
-            auto rhs_op = [&](const cell_type& cl) -> auto
-            {
-                tc_detail.tic();
-                auto gradrec  = gradrec_pst.compute(msh, cl);
-                auto rec_oper = gradrec.first;
-                auto at_form  = gradrec.second;
-                timings["Gradient reconstruction"] += tc_detail.to_double();
-                tc_detail.toc();
-
-                tc_detail.tic();
-                auto st_form  = stabilization.compute(msh, cl, rec_oper);
-                timings["Stabilization"] += tc_detail.to_double();
-                tc_detail.toc();
-
-                matrix_type loc   =  kappa * (at_form + st_form);
-                auto cell_rhs     =  disk::compute_rhs<cell_basis_type, cell_quadrature_type>(msh, cl, solution.f, m_degree);
-                auto cell_id      =  cl.get_id();
-                auto tsr          =  tsr_vec.at(cell_id);
-
-                tc_detail.tic();
-                auto pst_rhs = plasticity.compute(msh, cl, rec_oper, Uh_Th.at(cell_id), tsr);
-                tc_detail.toc();
-                timings["Plasticity"] += tc_detail.to_double();
-
-                //WK: if diffusion changes with domain, it would be mandatory to include mu here, to do it locally
-                //Bc
-                tc_detail.tic();
-                vector_type Bc = statcond_pst.compute_rhs(msh, cl, loc, cell_rhs,
-                                                scalar_type(on_pst) * pst_rhs);
-                tc_detail.toc();
-                timings["Static condensation"] += tc_detail.to_double();
-
-                return  Bc;
-            };
-
-            parallel_transform(msh.cells_begin(), msh.cells_end(), rhs_vec.begin(), rhs_op);
-            assembly_pst.initialize_rhs();
-            for (auto& cl : msh)
-            {
-                auto cl_id  = cl.get_id();
-                auto Bc     = rhs_vec.at(cl_id);
-                tc_detail.tic();
-                assembly_pst.assemble_rhs(msh, cl, Bc);
-                tc_detail.toc();
-                timings["RHS_Assembly"] += tc_detail.to_double();
-            }
-            tc.toc();
-            timings["Assembly"] += tc.to_double();
-            #endif
-
-            assembly_pst.impose_boundary_conditions_rhs(msh, solution.sf);
-            /* SOLVE */
-            dynamic_vector<scalar_type> X = solver.solve(assembly_pst.rhs);
-
-            //std::cout << "B : [ "<< assembly_pst.rhs << " ]"<< std::endl;
-
-            //_____________________________________________________________________
-
-            scalar_type error_gamma = 0.0;
-            scalar_type error_u_Ruh = 0.0;
-            scalar_type error_dof   = 0.0;
-            scalar_type error_fun   = 0.0;
-            scalar_type error_dfun   = 0.0;
-
-
-            disk::projector_nopre<mesh_type,
-                                cell_basis_type,
-                                cell_quadrature_type,
-                                face_basis_type,
-                                face_quadrature_type> projk(m_degree);
-
-            //std::ofstream ofs( mp.directory + "/plotnew.dat");
-            auto col_range  =   cb.range(1, m_degree + 1);
-            auto row_range  =   disk::dof_range(0,mesh_type::dimension);
-            size_t  fbs     =   fb.size();
-
-            for (auto& cl : msh)
-            {
-                auto cell_id   = cl.get_id();
-                auto fcs_ids   = cl.faces_ids();
-                auto num_faces = fcs_ids.size();
-
-                dynamic_vector<scalar_type> xFs = dynamic_vector<scalar_type>::Zero(num_faces * fbs);
-
-                for (size_t face_i = 0; face_i < num_faces; face_i++)
-                {
-                    auto face_id = fcs_ids.at(face_i);
-                    dynamic_vector<scalar_type> xF = dynamic_vector<scalar_type>::Zero(fbs);
-                    xF = X.block(face_id * fbs, 0, fbs, 1);
-                    xFs.block(face_i * fbs, 0, fbs, 1) = xF;
-                }
-
-                matrix_type rec_oper = biforms.at(cell_id).rec_oper;
-                matrix_type loc_mat  = biforms.at(cell_id).cell_lhs * kappa;
-                vector_type cell_rhs = biforms.at(cell_id).cell_rhs;
-                vector_type pst_rhs;
-                if(mp.diff)  //Only for diffusion test
-                    pst_rhs  = plasticity.compute(msh, cl, rec_oper, Uh_Th.at(cell_id), solution);
-                else         //Uncomment this for plasticity
-                    pst_rhs  = plasticity.compute(msh, cl, rec_oper, Uh_Th.at(cell_id), tsr_vec.at(cell_id));
-
-                dynamic_vector<scalar_type>   x;
-                x = statcond_pst.recover(msh, cl, loc_mat, cell_rhs, xFs, on_pst * pst_rhs);
-                Uh_Th.at(cell_id)  = x;
-                vector_type ruh = rec_oper * x;
-
-                size_t number(1);
-                if(mp.diff)
-                    number = disk::set_cell_number(msh, cl);
-
-                //____________________________________________________________________
-                if( solution.is_exact)
-                {
-                    auto qps = cq.integrate(msh, cl);
-                    auto low_order_range = cb.range(0, m_degree);
-                    for (auto& qp : qps )
-                    {
-                        auto phi  = cb.eval_functions(msh, cl, qp.point());
-                        auto dphi = cb.eval_gradients(msh, cl, qp.point());
-
-                        scalar_type pot = 0.0;
-                        for (size_t i = 0; i < low_order_range.size(); i++)
-                            pot += phi[i] * x(i);
-
-                        vector_type dpot;
-                        matrix_type dphi_matrix =   disk::make_gradient_matrix(dphi);
-                        matrix_type dphi_taken  =   disk::take(dphi_matrix, row_range, col_range);
-                        matrix_type dphi_ruh =   dphi_taken * ruh;
-                        dpot = dphi_ruh;
-
-                        //auto potr  = solution.sf(qp.point());
-                        auto potr  = solution.sf(qp.point(), number);
-                        vector_type dpotr = solution.df(qp.point(), number);
-                        scalar_type diff  = 0.0;
-                        diff = (pot - potr) * (pot - potr) * qp.weight();
-                        //std::cout << pot << " " << potr << " " << qp.weight() << " " << diff << std::endl;
-
-                        scalar_type d_diff = 0.0;
-                        d_diff = (dpot - dpotr).dot(dpot - dpotr) * qp.weight();
-
-                        error_fun  += diff;
-                        error_dfun += d_diff;
-                        auto tp = qp.point();
-
-                        //for (size_t i = 0; i < mesh_type::dimension; i++)
-                        //    ofs << tp[i] << " ";
-                        //ofs << pot << " " << std::abs(pot - solution.sf(tp)) << std::endl;
-                    }
-
-                    dynamic_vector<scalar_type> true_dof = projk.compute_cell(msh, cl, solution.sf);
-                    dynamic_vector<scalar_type> comp_dof = x.block(0,0,true_dof.size(), 1);
-                    dynamic_vector<scalar_type> diff_dof = (true_dof - comp_dof);
-                    error_dof += diff_dof.dot(projk.cell_mm * diff_dof);
-                }
-                //_____________________________________________________________________
-
-                //____________________________________________________________________
-
-                auto qps_pst = cq_pst.integrate(msh, cl);
-                size_t col = 0;
-
-                for (auto& qp : qps_pst)
-                {
-                    auto   dphi =  cb.eval_gradients(msh, cl, qp.point());
-                    matrix_type dphi_matrix =   disk::make_gradient_matrix(dphi);
-                    matrix_type dphi_taken  =   disk::take(dphi_matrix, row_range, col_range);
-                    vector_type dphi_ruh    =   dphi_taken * ruh;
-
-                    vector_type gamma =  tsr_vec.at(cell_id).gamma.col(col);
-                    error_gamma  += qp.weight() * (gamma - dphi_ruh).dot(gamma - dphi_ruh);
-                    col++;
-                }
-            }
-
-            error_gamma    = std::sqrt(error_gamma);
-            error_dof      = std::sqrt(error_dof);
-            scalar_type    solver_conv = std::abs(error_ALG - error_gamma);
-            //error_u_Ruh   = std::sqrt(error_u_Ruh);
-            error_ALG      = error_gamma;
-            ifs<<tostr(iter) <<"  "<<error_gamma<<" "<<error_dof<<" "<<solver_conv<<std::endl;
-            std::cout << "l2-norm error, gamma - Du  :" << error_gamma << std::endl;
-            std::cout << "l2-norm error, ierations   :" << solver_conv << std::endl;
-            std::cout << "L2-norm error, dof:   " << error_dof << std::endl;
-
-
-            if(error_gamma < 1.e-10)
-            {
-                finalize(1, msh, error_gamma, solver_conv, error_dof, tfs);
+                finalize(1, msh, error.gamma, solver_conv, error.dof, tfs);
                 break;
             }
             if( iter == m_max_iters - 1 )
             {
-                finalize(2, msh, error_gamma, solver_conv, error_dof, tfs);
+                finalize(2, msh, error.gamma, solver_conv, error.dof, tfs);
                 break;
             }
             if(solver_conv < 1.e-12)
             {
-                finalize(3, msh, error_gamma, solver_conv, error_dof, tfs);
+                finalize(3, msh, error.gamma, solver_conv, error.dof, tfs);
                 break;
             }
         }
@@ -925,15 +893,27 @@ public:
 
         ifs.close();
         tfs.close();
-
-        //for (auto& t : timings)
-        //    std::cout << " * " << t.first << ": " << t.second << " seconds." << std::endl;
-
-        //std::cout << "L2-norm error, dof:         " << error_dof << std::endl;
         return;
     }
+    
+    test_variable_ADMM()
+    {
+        auto alpha_max = ;
+        auto alpha_min = ;
 
+        auto beta_max  = ;
+        auto beta_min  = ;
 
+        auto stoppind_tol = ;
+        auto residue   = 1.e10;
+
+        for(size_t iter = 0; iter < MAX_RESTARTS; iter++)
+        {
+
+            test_plasticity();
+
+        }
+    }
 };
 //#define DEBUG
 template<typename Parameters, typename MeshParameters, typename T>
