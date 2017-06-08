@@ -713,7 +713,9 @@ public:
     {
 
         typedef quadrature<mesh_type, cell_type>     cell_quadrature_type;
+        typedef quadrature<mesh_type, face_type>     face_quadrature_type;
         cell_quadrature_type    cq(quad_degree);
+        face_quadrature_type    fq(quad_degree);
         std::stringstream       vtk_points, vtk_elems, vtk_data_x, vtk_data_y, vtk_data_norm;
 
         std::ofstream cofs(name);
@@ -774,7 +776,7 @@ public:
             }
             cofs<< " ];"<<std::endl;
 
-            cofs<< " B = ["<<std::endl;
+            cofs<< " VERT = ["<<std::endl;
             auto fcs = faces(msh, cel);
             for (auto& fc : fcs)
             {
@@ -787,6 +789,22 @@ public:
                 }
                 cofs<<std::endl;
             }
+
+            cofs<< " FQP = ["<<std::endl;
+            for (auto& fc : fcs)
+            {
+                auto fqs = fq.integrate(msh, fc);
+
+                for(auto& qp: fqs)
+                {
+                    auto tp  = qp.point();
+                    for (size_t d = 0; d < DIM; d++)
+                        cofs << tp[d] << " ";
+                    cofs<<std::endl;
+                }
+                cofs<<std::endl;
+            }
+
             cofs<< " ];"<<std::endl;
 
             cofs<< " V{"<<cell_id + 1 <<",1} = A;"<<std::endl;
@@ -1481,8 +1499,52 @@ postprocess(const  mesh<T,DIM,Storage>&  msh,
     get_from_tensor(quadeg,  tsr_vec, "quad_degree");
     save_data(quadeg, mp.directory + "/QuadDegree" + info +".txt");
 
+    auto exfunc_name = mp.directory + "/exFunction.m";
+
+    std::ofstream effs(exfunc_name);
+    if (!effs.is_open())
+        std::cout << "Error opening file :"<<exfunc_name <<std::endl;
+
+    effs << "col = 2"<<std::endl;
+    effs << "Rconvergence = false"<<std::endl;
+    effs << "if Rconvergence ==true"<<std::endl;
+    effs << "   col = 5"<<std::endl;
+    effs << "end"<<std::endl;
+
+    effs << "draw_error = true"<<std::endl;
+    effs << "draw_mesh  = true"<<std::endl;
+    effs << "print_mesh = false"<<std::endl;
+    effs << "print_error= false"<<std::endl;
+    effs << "error_name = 'nothing'"<<std::endl;
+    effs << "execute" + mp.summary<<std::endl;
+    effs << "if print_error == true "<<std::endl;
+    effs << "   name = strcat(error_name,'"<<mp.summary + ".png')"<<std::endl;
+    effs << "   legend('-DynamicLegend')" <<std::endl;
+    effs << "   print -dpng name" <<std::endl;
+    effs << "end"<<std::endl;
+    effs.close();
     return er;
 };
+
+template<typename MeshParameters>
+void
+execute(std::ofstream & exfs,
+        const MeshParameters& mp,
+        const size_t imsh)
+{
+    exfs<< "if draw_error == true "<<std::endl;
+    exfs<< "e"<< imsh <<"= load('error"<<mp.summary<<"_R"<<imsh<<".dat');"<<std::endl;
+    exfs << "figure(20); hold on; loglog(e"<<imsh<<"(:,1),e"<<imsh<<"(:,col), 'DisplayName', 'step "<<imsh<<"' , 'color', rand(1,3));"<<std::endl;
+    exfs<< "end" << std::endl;
+
+    exfs<< "if draw_mesh == true "<<std::endl;
+    exfs<< "figure("<<imsh+1<<")"<<std::endl;
+    exfs<< "mesh"<<mp.summary<<"_R" <<imsh<<std::endl;
+    exfs<< "if print_mesh == true "<<std::endl;
+    exfs<< "print -dpng mesh"<<mp.summary<<"_R" <<imsh<<".png;"<<std::endl;
+    exfs << "end"<<std::endl;
+    exfs << "end"<<std::endl;
+}
 
 #if 0
 template<typename T, size_t DIM, typename Storage, typename TensorsType,

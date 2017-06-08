@@ -43,16 +43,36 @@ struct mesh_parameters
     T       percent;
     int     mesh_name;
     int     num_remesh;
-    int     initial_imsh;
-    bool    hanging_nodes;
     bool    call_mesher;
+    int     initial_imsh;
     int     marker_name;
     bool    recycle;
+    bool    hanging_nodes;
     bool    diff;
     bool    mark_all;
     std::string     short_mesh_name;
     std::string     directory;
     std::string     summary;
+    std::string     summary_old;
+
+    friend std::ostream& operator<<(std::ostream& os, const mesh_parameters<T>& mp) {
+        os << "Mesh Parameters: "<<std::endl;
+        os << "* percent      : "<< mp.percent<< std::endl;
+        os << "* mesh_name    : "<< mp.mesh_name<< std::endl;
+        os << "* num_remesh   : "<< mp.num_remesh<< std::endl;
+        os << "* call_mesher  : "<< mp.call_mesher<< std::endl;
+        os << "* initial_imsh : "<< mp.initial_imsh<< std::endl;
+        os << "* marker_name  : "<< mp.marker_name<< std::endl;
+        os << "* recycle      : "<< mp.recycle<< std::endl;
+        os << "* hanging_nodes: "<< mp.hanging_nodes<< std::endl;
+        os << "* diffusion    : "<< mp.diff<< std::endl;
+        os << "* mark_all     : "<< mp.mark_all<< std::endl;
+        os << "* short_mesh_name: "<< mp.short_mesh_name<< std::endl;
+        os << "* directory    : "<< mp.directory<< std::endl;
+        os << "* summary      : "<< mp.summary<< std::endl;
+        os << "* summary_old  : "<< mp.summary_old<< std::endl;
+        return os;
+    }
 };
 
 template<typename T, size_t DIM, typename Storage>
@@ -185,6 +205,7 @@ read_data(std::vector<T>& vec, const std::string& filename)
 
     if (!ifs.is_open())
         std::cout << "Error opening file"<<std::endl;
+    std::cout << "Opening file: "<< filename <<std::endl;
 
     ifs >> elements_to_read;
     std::cout << "Attempting to read " << elements_to_read << " values" << std::endl;
@@ -209,6 +230,7 @@ read_data(std::vector<dynamic_vector<T>>& vec, const std::string& filename)
     if (!ifs.is_open())
         std::cout << "Error opening file: "<< filename <<std::endl;
 
+    std::cout << "Opening file: "<< filename <<std::endl;
     ifs >> elements_to_read;
     std::cout << "Attempting to read " << elements_to_read << " values" << std::endl;
 
@@ -243,6 +265,7 @@ read_data(std::vector<dynamic_matrix<T>>& vec, const std::string& filename)
 
     if (!ifs.is_open())
         std::cout << "Error opening file: "<< filename<<std::endl;
+    std::cout << "Opening file: "<< filename <<std::endl;
 
     ifs >> elements_to_read;
     std::cout << "Attempting to read " << elements_to_read << " values" << std::endl;
@@ -282,6 +305,7 @@ read_data(std::vector<std::pair<size_t, size_t>>& vec,
 
     if (!ifs.is_open())
         std::cout << "Error opening file: "<< filename<<std::endl;
+    std::cout << "Opening file: "<< filename <<std::endl;
 
     ifs >> elements_to_read;
     std::cout << "Attempting to read " << elements_to_read << " values" << std::endl;
@@ -421,37 +445,42 @@ put_tensor(std::vector<TensorsType>& tsr_vec,
 //2 - Fix the thing of rmc and rm
 //3 - step: imsh for levels_ancestors_vec
 //    step: imsh-1 for Uh_Th and tsr since is info on the previous mesh
+#endif
 
 template<typename T, typename InputVectorType>
 void
  load_data(InputVectorType& vec,
             const mesh_parameters<T>& mp,
             const std::string& name,
+            const std::string& R,
             const size_t step)
 {
      typedef dynamic_vector<T> vector_type;
      typedef dynamic_matrix<T> matrix_type;
 
-     auto info_other = mp.summary + "_rm" + tostr(step) +".txt";
-     std::cout << "namefile to open:  "<< mp.directory + name + info_other << std::endl;
-     read_data(vec, mp.directory + name + info_other);
+     auto info_other = mp.summary_old + "_" + R + tostr(step) +".txt";
+     auto filename   = mp.directory + name + info_other;
+     std::cout << "namefile to open:  "<<  filename << std::endl;
+     read_data(vec, filename);
  }
-#endif
 template<typename T>
 void
 load_data(std::vector<std::pair<size_t,size_t>>& levels_ancestors_vec,
                    std::vector<size_t>& index_transf,
                    const mesh_parameters<T>& mp,
-                   const size_t imsh)
+                   const std::string& name,
+                   const std::string& R,
+                   const size_t step)
 {
     typedef dynamic_vector<T> vector_type;
     typedef dynamic_matrix<T> matrix_type;
 
-    auto info = mp.summary + "_R" + tostr(imsh) +".txt";
-    std::cout << "/* namefile to open:  "<< mp.directory + "/levels" + info << std::endl;
-    read_data(levels_ancestors_vec, index_transf, mp.directory + "/levels" + info);
-    std::cout << "levels_ancestors reading succesful" << std::endl;
+    auto info_other = mp.summary_old + "_" + R + tostr(step) +".txt";
+    auto filename   = mp.directory + name + info_other;
+    std::cout << "namefile to open:  "<<  filename << std::endl;
+    read_data(levels_ancestors_vec, index_transf, filename);
 }
+#if 0
 template< typename T>
 void
 load_data(std::vector<dynamic_vector<T>>& Uh_Th,
@@ -461,18 +490,20 @@ load_data(std::vector<dynamic_vector<T>>& Uh_Th,
     typedef dynamic_vector<T> vector_type;
     typedef dynamic_matrix<T> matrix_type;
 
-    auto info = mp.summary + "_R" + tostr(imsh-1) +".txt";
+    auto info = mp.summary_old + "_R" + tostr(imsh-1) +".txt";
 
     std::cout << "/* namefile to open:  "<< mp.directory + "/Uh" + info << std::endl;
     read_data(Uh_Th , mp.directory + "/Uh"  + info);
 
     std::cout << "Uh reading succesful" << std::endl;
 }
+#endif
 template<typename TensorsType, typename T>
 void
 load_data(std::vector<TensorsType>& tsr_vec,
         const mesh_parameters<T>& mp,
-        const size_t imsh)
+        const std::string& R,
+        const size_t step)
 
 {
     typedef dynamic_vector<T> vector_type;
@@ -481,7 +512,7 @@ load_data(std::vector<TensorsType>& tsr_vec,
     std::vector<matrix_type> sigma;
     std::vector<T> quadeg;
 
-    auto info = mp.summary + "_R" + tostr(imsh-1) +".txt";
+    auto info = mp.summary_old + "_" + R + tostr(step-1) +".txt";
 
     get_from_tensor(sigma,  tsr_vec, "sigma");
     get_from_tensor(quadeg, tsr_vec, "quad_degree");
@@ -732,6 +763,7 @@ sigma_interpolation(const mesh<T,2,Storage>& new_msh,
                     const mesh<T,2,Storage>& old_msh,
                     const std::vector<TensorType>& tsr_vec,
                     const std::vector<size_t>& ancestors,
+                    const std::vector<size_t>& cells_marks,
                     const size_t degree)
 {
     std::cout << "INSIDE SIGMA INTERPOLATION" << std::endl;
@@ -745,18 +777,30 @@ sigma_interpolation(const mesh<T,2,Storage>& new_msh,
 
     for(auto& cell : new_msh)
     {
-        auto cell_id  = cell.get_id();
+        auto cell_id        = cell.get_id();
         auto ancestor_id    = ancestors.at(cell_id);
         auto ancestor_cell  = *std::next(old_msh.cells_begin(), ancestor_id);
+        auto cell_mark      = cells_marks.at(ancestor_id);
+
         auto tsr      =  tsr_vec.at(ancestor_id);
         auto new_tsr  =  new_tsr_vec.at(cell_id);
-        auto num_pts  =  new_tsr.siglam.cols();
-        auto qdegree  =  tsr.quad_degree;
-        //std::cout << "quad_degree_ancestor ("<< ancestor_id<<"): "<< qdegree << std::endl;
-        auto pts_to_eval_sigma  = new_points(new_msh, cell, qdegree, num_pts);
-        matrix_type sigma = compute_interpolation(new_msh, cell, tsr, pts_to_eval_sigma);
-        new_tsr_vec.at(cell_id).siglam = sigma;
-        //std::cout << "quad_degree_cell ("<< cell_id<<")        : "<< new_tsr_vec.at(cell_id).quad_degree << std::endl;
+
+        //std::cout << " *  cell_level ("<< cell_id<<"," << ancestor_id  <<") : "<< cell_mark << std::endl;
+
+        if( cell_mark > 1) //Just cells to refine or its neighbors ( new hanging nodes)
+        {
+            auto num_pts  =  new_tsr.siglam.cols();
+            auto qdegree  =  tsr.quad_degree;
+            //std::cout << "quad_degree_ancestor ("<< ancestor_id<<"): "<< qdegree << std::endl;
+            auto pts_to_eval_sigma  = new_points(new_msh, cell, qdegree, num_pts);
+            matrix_type sigma = compute_interpolation(new_msh, cell, tsr, pts_to_eval_sigma);
+            new_tsr_vec.at(cell_id).siglam = sigma;
+        }
+        else
+        {
+            new_tsr_vec.at(cell_id).siglam = tsr.siglam;
+        }
+
     }
     return new_tsr_vec;
 };
@@ -862,8 +906,8 @@ public:
     }
 
     template<typename LoaderType>
-    void
-    refine(mesh_type & msh,
+    auto
+    refine(const mesh_type & msh,
            const std::string&  directory)
     {
         mesh_type re_msh;
@@ -915,7 +959,7 @@ public:
         storage_rm->boundary_nodes.at(0) = true;
         storage_rm->boundary_nodes.at(num_rm_pts - 1) = true;
 
-        msh = re_msh;
+        return re_msh;
     }
 
 };
@@ -984,70 +1028,48 @@ public:
     stress_based_mesh(const mesh_type& msh,
                         const std::vector<size_t>& levels_vec,
                         const plasticity_data<T>&  m_pst,
-                        const mesh_parameters<T>& msh_parameters,
+                        const mesh_parameters<T>&  msh_parameters,
                         const size_t& adaptive_step):
                         pst(m_pst),
                         mp(msh_parameters),
                         imsh(adaptive_step)
     {
         info  =  mp.summary + "_RC" + tostr(imsh);
+
+        std::cout << "Constructor sbm mp.summary :"<< mp.summary << std::endl;
         //check_older_msh(msh);
         cells_marks = std::vector<size_t>(msh.cells_size(),0);
         levels = levels_vec;
         level_ancestor.reserve(msh.cells_size());
+        faces_marks.resize(msh.faces_size());
 
-        // This only to mark all the cells on each adaptation (thought as a test);
-        // Comment this for normal adaptations. Also reveiw test adaptation if( imsh > 0)
-        // (remember this does a  first adaptation  to ensure only triangles).
+        for(size_t i = 0; i < faces_marks.size(); i++)
+            faces_marks.at(i).first = false;
+
+        // Marking all cells was conceive as a test
         if(mp.mark_all)
-        {
-            for(auto& cell: msh)
-            {
-                auto cell_id = cell.get_id();
-                cells_marks.at(cell_id) = 3;
-            }
-
-            for(auto& b : cells_marks)
-                std::cout<<b<<"  ";
-            std::cout  << std::endl;
-
-            // Esto creo que es necesqrio incluso para adapt 0, puesto que en ningun otro lado aparece
-            // la inicialization con el tamanho de faces_marks. No se como estaba funcionando para imsh ==0
-            faces_marks.resize(msh.faces_size());
-            for(size_t i = 0; i < faces_marks.size(); i++)
-               faces_marks.at(i).first = false;
-        }
+            cells_marks = std::vector<size_t>(msh.cells_size(),3);
         else
         {
-            //This is only to start only with triangles
+            //This refinement is aimed to start only with triangles.
             //if we want to have more polygons take out this and solve
             //the problem with the refinement_other
-            //#if 0
             if(imsh == 0)
             {
                 for(auto& cell: msh)
                 {
                     auto cell_id = cell.get_id();
-                    auto c_faces = faces(msh, cell);
-                    if(c_faces.size() > 3)
+                    auto pts = points(msh, cell);
+                    auto vts = msh.get_vertices(cell , pts);
+                    if(vts.size() > 3)
                         cells_marks.at(cell_id) = 3;
                 }
-
-                for(auto& b : cells_marks)
-                    std::cout<<b<<"  ";
-                std::cout  << std::endl;
-
             }
-            //#endif
-            else
-            {
-                faces_marks.resize(msh.faces_size());
-                for(size_t i = 0; i < faces_marks.size(); i++)
-                    faces_marks.at(i).first = false;
-            }
-            //#endif
         }
 
+        for(auto& b : cells_marks)
+            std::cout<<b<<"  ";
+        std::cout  << std::endl;
     }
     template< size_t N>
     struct n_gon
@@ -1716,9 +1738,9 @@ public:
                 for(auto & p : pts)
                     mefs <<eta.at(cont).second <<" "<< p.x() <<" " << p.y()<<std::endl;
                 mefs << " ];"<<std::endl;
-                mefs << "fill(coords(:,2), coords(:,3), color_mat("<<i + 1<<",:)) "<<std::endl;
+                mefs << "fill(coords(:,2), coords(:,3), color_mat("<<i + 1<<",:)); "<<std::endl;
                 mefs<< "strName = strtrim(cellstr(num2str("<< eta.at(cont).second<<",'(%d)')));"<<std::endl;
-                mefs<< "text("<<b.x()<< ","<< b.y() <<",strName,'VerticalAlignment','bottom');"<<std::endl;
+                mefs<< "\%text("<<b.x()<< ","<< b.y() <<",strName,'VerticalAlignment','bottom');"<<std::endl;
 
                 ++cont;
 
@@ -1809,19 +1831,24 @@ public:
                 for(auto & p : pts)
                     mefs <<eta.at(cont).second <<" "<< p.x() <<" " << p.y()<<std::endl;
                 mefs << " ];"<<std::endl;
-                mefs << "fill(coords(:,2), coords(:,3), color_mat("<<i + 1<<",:)) "<<std::endl;
+                mefs << "hc = fill(coords(:,2), coords(:,3), color_mat("<<i + 1<<",:)) ;"<<std::endl;
+                mefs << "set(hc,'EdgeColor','none');"<<std::endl;
                 mefs<< "strName = strtrim(cellstr(num2str("<< eta.at(cont).second<<",'(%d)')));"<<std::endl;
-                mefs<< "text("<<b.x()<< ","<< b.y() <<",strName,'VerticalAlignment','bottom');"<<std::endl;
-                mefs<<  eta.at(cont).first <<std::endl;
+                mefs<< "\%text("<<b.x()<< ","<< b.y() <<",strName,'VerticalAlignment','bottom');"<<std::endl;
+                mefs<<  eta.at(cont).first<<";" <<std::endl;
                 ++cont;
             }
         }
         auto vmax = eta.at(0).first;
         auto vmin = eta.at(eta.size()-1).first;
         auto h = (vmax - vmin) / 10.;
-        mefs<< "h = colorbar;"<<std::endl;
-        mefs<< "caxis(["<< vmin <<" "<< vmax <<"])"<<std::endl;
-        mefs<< "set(h,'YTick',["<<vmin<<":"<< h <<":"<< vmax <<"])"<<std::endl;
+
+        mefs<< "set(gca,'XTick',get(gca,'YTick'));"<<std::endl;
+        mefs<< "colormap(fliplr(color_mat));"<<std::endl;;
+        mefs<< "hcb = colorbar;"<<std::endl;;
+        mefs<< "caxis([3.4577e-14 8.73979e-05]);"<<std::endl;;
+        mefs<< "caxis(["<< vmin <<" "<< vmax <<"]);"<<std::endl;
+        mefs<< "set(hcb,'YTick',["<<vmin<<":"<< h <<":"<< vmax <<"]);"<<std::endl;
 
         mefs.close();
         assert(cont == msh.cells_size());
@@ -2016,7 +2043,7 @@ public:
 
                     std::cout << " * div_tau : "<< div_tau << std::endl;
                     std::cout << " * isnan ? : "<< std::isnan(div_tau) << std::endl;
-                    #endif 0
+                    #endif
 
             }
 
@@ -2050,6 +2077,7 @@ public:
         std::vector<std::pair<T,size_t>> etas(msh.cells_size());
         std::vector<std::pair<T,size_t>> etar(msh.cells_size());
         // (n_res + n_stress)_T^2
+        std::cout << "1. size msh : "<< msh.cells_size() << std::endl;
         for(size_t cl_id = 0; cl_id < msh.cells_size(); cl_id++)
         {
             //Estimator
@@ -2060,6 +2088,7 @@ public:
 
             eta.at(cl_id).first  = eT;
             eta.at(cl_id).second = cl_id;
+            std::cout << "2. *** cell_id : "<< cl_id << std::endl;
 
             etas.at(cl_id).first  = eT1;
             etas.at(cl_id).second = cl_id;
@@ -2129,7 +2158,7 @@ public:
             std::cout << cell_id <<"  "<< err_dof <<"  " <<error_dfun<<"  ";
             std::cout << eta_residual.at(cell_id) <<"  ";
             std::cout << eta_stress.at(cell_id) <<"  "<< std::sqrt(e.first) << std::endl;
-            #endif 0
+            #endif
         }
         ofs <<std::endl;
         ofs.close();
@@ -2138,12 +2167,73 @@ public:
         std::cout << "total error : "<< set_error << std::endl;
         std::cout << "percent     : "<< mp.percent << std::endl;
 
+        std::cout << "3. BEGIN ETA" << std::endl;
+        std::cout << "4.** size LEVELS: "<< levels.size() << std::endl;
+
+        struct group
+        {
+            typedef typename std::vector<std::pair<T,size_t>>::iterator  itor_type;
+
+            T value;
+            itor_type itor_begin;
+            itor_type itor_end;
+
+            group(){};
+
+            group(const T val, const itor_type& begin, const itor_type& end)
+            {
+                value = val;
+                itor_begin = begin;
+                itor_end   = end;
+            }
+
+
+
+        };
+
+
+        bool add_group(false);
+        group initial_group(eta[0].first, eta.begin(), eta.begin());
+        std::vector<group> eta_group  {initial_group};
+
+        for(auto itor = eta.begin(); itor <= eta.end(); itor++)
+        {
+            auto e = *itor;
+
+            add_group = true;
+
+            //for(auto& eg: eta_group)
+            //    std::cout << "        "<<eg.value << std::endl;
+
+            for(auto& eg : eta_group)
+            {
+                if((std::abs(e.first - eg.value)/eg.value <= 1.e-4))
+                {
+                    add_group  = false;
+                    eg.itor_end  = itor;
+                    break;
+                }
+            }
+            if(add_group)
+            {
+                //std::cout  << "Adding group" << std::endl;
+
+                group new_group(e.first ,itor, itor);
+                eta_group.push_back(new_group);
+            }
+        }
+
+        std::cout << "eta_group size: "<< eta_group.size() << std::endl;
+
+        #if 0
+        // Marking by cells
         for(auto& e : eta)
         {
             auto cell_id   = e.second;
             new_set_error += e.first;
 
             cells_marks.at(cell_id) = 3;
+            std::cout << "5.*** cell_id : "<< cell_id << std::endl;
             ++levels.at(cell_id);
             do_refinement  = true;
 
@@ -2153,6 +2243,29 @@ public:
             if( new_set_error >= mp.percent * set_error )
                 break;
         }
+        #endif
+        // Marking by groups
+        for(auto eg : eta_group)
+        {
+            for(auto it = eg.itor_begin; it <= eg.itor_end; it++)
+            {
+                auto e = *it;
+                auto cell_id   = e.second;
+                new_set_error += e.first;
+
+                cells_marks.at(cell_id) = 3;
+                //std::cout << "5.*** cell_id : "<< cell_id << std::endl;
+                ++levels.at(cell_id);
+                do_refinement  = true;
+
+                //std::cout << "cell : "<< cell_id <<std::endl;
+                //std::cout << " * eta   : "<< e.first << std::endl;
+                //std::cout << " * error : "<< new_set_error << std::endl;
+            }
+            if( new_set_error >= mp.percent * set_error )
+                break;
+        }
+
         dump_to_matlab( msh, mp.directory + "/mesh_pr_" +  info + ".m", cells_marks);
 
         if(mp.marker_name == 6 )
@@ -3818,13 +3931,14 @@ public:
     }
 
     template<typename LoaderType>
-    void refine( mesh_type & msh,
-                const std::vector<vector_type>&  Uh_Th,
-                const size_t& degree)
+    auto
+    refine( const mesh_type & old_msh,
+            const size_t    & degree)
     {
-        mesh_type re_msh, new_mesh;
+        mesh_type re_msh, new_mesh, msh;
 
-        re_msh = msh;
+        msh = old_msh;
+        re_msh  = msh;
 
         auto storage    = msh.backend_storage();
         auto re_storage = re_msh.backend_storage();
@@ -3832,7 +3946,13 @@ public:
         size_t nds_counter = 0;
 
         face_marker(re_msh);
-        dump_to_matlab(msh, mp.directory + "/mesh" + mp.summary +".m",cells_marks);
+
+        auto other_info = mp.summary + "_RC" + tostr(imsh);
+        auto marks_filename = mp.directory + "/marks" + other_info + ".txt";
+        auto mesh_filename  = mp.directory + "/mesh"  + other_info + ".m";
+
+        dump_to_matlab(msh, mesh_filename, cells_marks);
+        save_data(cells_marks, marks_filename);
 
         for(auto& cl : msh)
         {
@@ -3977,8 +4097,7 @@ public:
             std::cout << l;
         std::cout<< std::endl;
 
-        old_msh = msh;
-        msh     = new_mesh;
+        return new_mesh;
     }
     template <typename LoaderType>
     bool
@@ -4025,6 +4144,7 @@ public:
             ofs << std::endl;
         }
     }
+
 
     template <typename LoaderType>
     bool

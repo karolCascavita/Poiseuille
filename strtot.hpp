@@ -94,7 +94,7 @@ strtot(const char *str, char **endptr)
 
 template< typename T>
 std::string
-to_string(const T & var)
+tostr(const T & var)
 {
     std::ostringstream  ostr;
     ostr << var;
@@ -102,9 +102,19 @@ to_string(const T & var)
 }
 template<>
 std::string
-to_string(const double & var)
+tostr(const double & var)
 {
     std::stringstream  ostr;
     ostr<< std::fixed << std::setprecision(2) << var;
+    return ostr.str();
+}
+
+template<>
+std::string
+tostr(const bool & var)
+{
+    int ivar = (var);
+    std::ostringstream  ostr;
+    ostr << ivar;
     return ostr.str();
 }

@@ -361,6 +361,12 @@ public:
     {
         auto id = cl.get_id();
         auto sp =  this->backend_storage()->special_surfaces.at(id);
+
+        std::cout << "vts_ids 1: [";
+        for(auto& p : sp.second)
+            std::cout << p << " ";
+        std::cout << "]" << std::endl;
+
         return sp.second;
     }
 
@@ -384,12 +390,24 @@ public:
         typedef std::pair<bool, std::vector<typename point_type::id_type>> pair;
 
         auto id = cl.get_id();
-        pair sp =  this->backend_storage()->special_surfaces.at(id);
-        std::vector<typename point_type::id_type>  vertices_ids = sp.second;
+        auto sp =  this->backend_storage()->special_surfaces.at(id);
+        auto vertices_ids = sp.second;
+        #if 0
+        std::cout << "vts_ids 2: [";
+        for(auto& p : vertices_ids)
+            std::cout << p << " ";
+        std::cout << "]" << std::endl;
+
+
+        std::cout << "vertices 2: [";
+        for(auto& p : vertices)
+            std::cout << p.x() << " "<< p.y() <<std::endl;
+        std::cout << "]" << std::endl;
+        #endif
         std::vector<point_type> vertices(vertices_ids.size());
 
         size_t i = 0;
-        for(auto& id: vertices_ids)
+        for(auto id: vertices_ids)
             vertices.at(i++) = pts.at(id);
 
         return vertices;
@@ -691,8 +709,17 @@ dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename, cons
     std::ofstream ofs(filename);
     if (!ofs.is_open())
         std::cout << "Error opening file"<<std::endl;
+
+    ofs << " hold on"<<std::endl;
     for (auto cl : msh)
     {
+
+        auto b  = barycenter(msh,cl);
+        auto id = msh.lookup(cl);
+        ofs<< "plot( "<< b.x() << ", " << b.y() <<",'r');"<<std::endl;
+        ofs<< "str = strtrim(cellstr(num2str("<< vec.at(id) <<",'(%d)')));"<<std::endl;
+        ofs<< "text("<<b.x()<< ","<< b.y() <<",str,'VerticalAlignment','bottom');"<<std::endl;
+
         auto fcs = faces(msh, cl);
         for (auto fc : fcs)
         {
@@ -738,6 +765,8 @@ dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename,
     std::ofstream ofs(filename);
     if (!ofs.is_open())
         std::cout << "Error opening file"<<std::endl;
+
+    ofs << " hold on"<<std::endl;
     for (auto cl : msh)
     {
         ofs << " hold on"<<std::endl;

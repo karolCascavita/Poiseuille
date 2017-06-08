@@ -27,7 +27,7 @@ namespace disk {
 template<typename T>
 struct plasticity_data
 {
-    plasticity_data(): Lref(1.), Vref(1.), Bn(0.), mu(1.), alpha(1.), betha(1.), f(1.),
+    plasticity_data(): Lref(1.), Vref(1.), Bn(0.), mu(1.), alpha(1.), beta(1.), f(1.),
                         method(false), hho(2)
     {}
     T f;                    //WK: Cuidado porque f deberia ser el valor externo de la fuente.
@@ -36,10 +36,26 @@ struct plasticity_data
     T Bn;                   /* Bingham number */
     T mu;                   /* viscosity */
     T alpha;
-    T betha;
+    T beta;
     T yield;
     bool   method;
     size_t hho;
+
+    friend std::ostream& operator<<(std::ostream& os, const plasticity_data<T>& p){
+        os << "Plastic data: "<<std::endl;
+        os << "* method : "<< p.method<< std::endl;
+        os << "* hho    : "<< p.hho<< std::endl;
+        os << "* f      : "<< p.f<< std::endl;
+        os << "* Lref   : "<< p.Lref<< std::endl;
+        os << "* Vref   : "<< p.Vref<< std::endl;
+        os << "* yield  : "<< p.yield<< std::endl;
+        os << "* mu     : "<< p.mu<< std::endl;
+        os << "* Bingham: "<< p.Bn<< std::endl;
+        os << "* alpha  : "<< p.alpha<< std::endl;
+        os << "* beta   : "<< p.beta<< std::endl;
+
+        return os;
+    }
 };
 
 
@@ -651,9 +667,7 @@ public:
         for (size_t i = 0; i < lc.rows(); i++)
         {
             for (size_t j = 0; j < lc.cols(); j++)
-            {
                 m_triplets.push_back( triplet_type( l2g.at(i), l2g.at(j), lc(i,j) ) );
-            }
         }
     }
     template<typename LocalContrib>
@@ -685,7 +699,7 @@ public:
     }
 
     void
-    impose_boundary_conditions_lhs(const mesh_type& msh)
+    impose_boundary_conditions_lhs( mesh_type& msh)
     {
         size_t fbs = face_basis.size();
         size_t face_i = 0;
@@ -732,7 +746,7 @@ public:
     }
     template<typename Function>
     void
-    impose_boundary_conditions_rhs(const mesh_type& msh, const Function& bc)
+    impose_boundary_conditions_rhs(mesh_type& msh, const Function& bc)
     {
         //std::cout << "Imposing_boundary_conditions_rhs" << std::endl;
         size_t fbs = face_basis.size();
@@ -1050,6 +1064,25 @@ make_prod_stress_n(const  dynamic_vector<T>& st, const T& n )
     return  st(0) * n;
 }
 
+template<typename T, typename MeshType, typename CellType, typename CellBasisType>
+dynamic_vector<T>
+nabla_ruh_at_point( const point<T,2>& pt, //Check for this to be generalized to other dimensions.
+               const MeshType&  msh,
+               const CellType&  cl,
+               const CellBasisType& cell_basis,
+               const dynamic_vector<T>& ruh,
+               const size_t m_degree)
+{
+    auto col_range      = cell_basis.range(1,m_degree+1);
+    auto row_range      = disk::dof_range(0,MeshType::dimension);
+
+    auto dphi   = cell_basis.eval_gradients(msh, cl, pt);
+    dynamic_matrix<T> dphi_matrix = make_gradient_matrix(dphi);
+    dynamic_matrix<T> dphi_taken  = take(dphi_matrix, row_range, col_range);
+    dynamic_vector<T> dphi_ruh    = dphi_taken * ruh;
+    return dphi_ruh;
+}
+
 template<typename T,typename Mesh,typename CellBasisType, typename CellQuadType,
                        typename FaceBasisType, typename FaceQuadType>
 class plasticity
@@ -1077,9 +1110,6 @@ class plasticity
 
     size_t                                  m_quad_degree;
     size_t                                  m_degree;
-    size_t                                  m_hho;
-    T                                       m_yield;
-    T                                       m_alpha;
     T                                       m_method_coef;
 public:
     //vector_type     rhs;
@@ -1087,11 +1117,10 @@ public:
     //plasticity()                = delete;
     plasticity()
     {}
-    plasticity(const size_t& degree, const size_t& quad_degree,
-                                    const plasticity_data<T>& pst)
+    plasticity(const size_t& degree, const size_t& quad_degree)
+
     //WK: for mu as tensor one should check this part
-        : m_degree(degree), m_alpha(pst.alpha), m_yield(pst.yield), m_quad_degree(quad_degree),
-            m_hho(pst.hho)
+        : m_degree(degree), m_quad_degree(quad_degree)
     {
 
         cell_basis  =  cell_basis_type(m_degree + 1); // This is k + 1  just if I want to use \nabla r^{k + 1}
@@ -1100,11 +1129,8 @@ public:
         cell_quadrature     = cell_quadrature_type(m_quad_degree);
         face_quadrature     = face_quadrature_type(m_quad_degree);
 
-        if(pst.method == true)
-            m_method_coef = 1. / m_alpha ;
-        else
-            m_method_coef = 1. / (m_alpha + pst.mu);
     }
+
 
 
     vector_type
@@ -1112,11 +1138,17 @@ public:
                  const cell_type& cl,
                  const matrix_type& rec_oper,
                  const vector_type& uh_TF,
+                 const plasticity_data<T>& pst,
                  tensors<T> & tsr)
     {
-        //std::cout << "/**********   CELL = "<<msh.lookup(cl)<<"*********/" << std::endl;
-        //WK: for p-adaptation quad_degree is not the same for all cells
 
+        if(pst.method == true)
+            m_method_coef = 1. / pst.alpha ;
+        else
+            m_method_coef = 1. / (pst.alpha + pst.mu);
+
+
+        //WK: for p-adaptation quad_degree is not the same for all cells
 
         timecounter tc;
 
@@ -1132,7 +1164,7 @@ public:
         auto num_cell_dofs  = cell_range.size();
         auto num_face_dofs  = face_basis.size();
         dofspace_ranges    dsr(num_cell_dofs, num_face_dofs, num_faces);
-        matrix_type    ruh  = rec_oper * uh_TF;
+        vector_type    ruh  = rec_oper * uh_TF;
         vector_type    rhs  = vector_type::Zero(dsr.total_size());
         vector_type    rhs_c  = vector_type::Zero(num_cell_dofs);
         size_t cont  =  0;
@@ -1149,28 +1181,28 @@ public:
             vector_type dphi_ruh    =   dphi_taken * ruh;
             matrix_type dphi_rec    =   dphi_taken * rec_oper;
 
-            vector_type  xi    =  tsr.siglam.col(cont)  +  m_alpha * dphi_ruh;
+            vector_type  xi    =  tsr.siglam.col(cont)  +  pst.alpha * dphi_ruh;
             auto xi_norm = xi.norm();
 
             vector_type  gamma =  vector_type::Zero(mesh_type::dimension);
 
-            if(xi_norm > m_yield)
-                gamma   = m_method_coef * (xi_norm - m_yield) * (xi / xi_norm);
+            if(xi_norm > pst.yield)
+                gamma   = m_method_coef * (xi_norm - pst.yield) * (xi / xi_norm);
 
-            tsr.siglam.col(cont) +=  m_alpha * ( dphi_ruh - gamma );
+            tsr.siglam.col(cont) +=  pst.alpha * ( dphi_ruh - gamma );
             tsr.gamma.col(cont)   =  gamma;
             tsr.xi_norm(cont)     =  xi_norm;
 
             //( Dv_T, sigma - alpha* gamma)_T
-            if(m_hho == 2)
+            if(pst.hho == 2)
             {
                 matrix_type dphi_    = take(dphi_matrix, row_range, cell_range);
-                //rhs_c += qp.weight() * dphi_.transpose() * (tsr.siglam.col(cont) - m_alpha * gamma) ;
-                //rhs += qp.weight() * dphi_.transpose() * (tsr.siglam.col(cont) - m_alpha * gamma) ;
-                rhs.head(num_cell_dofs)  += qp.weight() * dphi_.transpose() * (tsr.siglam.col(cont) - m_alpha * gamma) ;
+                //rhs_c += qp.weight() * dphi_.transpose() * (tsr.siglam.col(cont) - pst.alpha * gamma) ;
+                //rhs += qp.weight() * dphi_.transpose() * (tsr.siglam.col(cont) - pst.alpha * gamma) ;
+                rhs.head(num_cell_dofs)  += qp.weight() * dphi_.transpose() * (tsr.siglam.col(cont) - pst.alpha * gamma) ;
             }
-            else if(m_hho ==  1)
-                rhs  += qp.weight() * dphi_rec.transpose() * (tsr.siglam.col(cont) - m_alpha * gamma) ;
+            else if(pst.hho ==  1)
+                rhs  += qp.weight() * dphi_rec.transpose() * (tsr.siglam.col(cont) - pst.alpha * gamma) ;
             else
                 throw std::invalid_argument("Invalid discretization name for the plasticity term. Review the name in parametes.txt or pst.hho");
 
@@ -1202,21 +1234,21 @@ public:
                 vector_type c_dphi_ruh    =   c_dphi_taken * ruh;
 
                 // xi = sigma + alpha *Dr(u)
-                vector_type  xi    =  tsr.siglam.col(cont)  +  m_alpha * c_dphi_ruh;
+                vector_type  xi    =  tsr.siglam.col(cont)  +  pst.alpha * c_dphi_ruh;
                 auto xi_norm = xi.norm();
 
                 vector_type  gamma =  vector_type::Zero(mesh_type::dimension);
-                if(xi_norm > m_yield)
-                    gamma  = m_method_coef * (xi_norm - m_yield)* (xi / xi_norm);
+                if(xi_norm > pst.yield)
+                    gamma  = m_method_coef * (xi_norm - pst.yield)* (xi / xi_norm);
 
-                tsr.siglam.col(cont) += m_alpha * ( c_dphi_ruh - gamma );
+                tsr.siglam.col(cont) += pst.alpha * ( c_dphi_ruh - gamma );
                 tsr.gamma.col(cont)   = gamma;
                 tsr.xi_norm(cont)     = xi_norm;
 
                 // ((sigma - alpha*gamma) * n
-                vector_type str =  tsr.siglam.col(cont) - m_alpha * gamma;
+                vector_type str =  tsr.siglam.col(cont) - pst.alpha * gamma;
                 scalar_type p1  =  make_prod_stress_n( str , n);
-                if(m_hho == 2)
+                if(pst.hho == 2)
                 {
                     // ( (sigma - alpha*gamma) * n, vT )_F
                     for (size_t i = 0; i < num_cell_dofs; i++)
@@ -1267,14 +1299,14 @@ public:
             matrix_type dphi_matrix = make_gradient_matrix(dphi);
             matrix_type dphi_taken  = take(dphi_matrix, row_range, col_range);
             vector_type dphi_ruh    = dphi_taken * ruh;
-            vector_type xi = tsr.siglam.col(j)  +  m_alpha * dphi_ruh;
+            vector_type xi = tsr.siglam.col(j)  +  pst.alpha * dphi_ruh;
             auto  xi_norm  = xi.norm();
             vector_type gamma =   vector_type::Zero(mesh_type::dimension);
 
-            if(xi_norm > m_yield)
-                gamma = m_method_coef * (xi_norm - m_yield) * (xi / xi_norm);
+            if(xi_norm > pst.yield)
+                gamma = m_method_coef * (xi_norm - pst.yield) * (xi / xi_norm);
 
-            tsr.siglam.col(j) += m_alpha * ( dphi_ruh - gamma );
+            tsr.siglam.col(j) += pst.alpha * ( dphi_ruh - gamma );
             tsr.gamma.col(j)   = gamma;
             tsr.xi_norm(j)     = xi_norm;
         }
@@ -1290,14 +1322,14 @@ public:
             matrix_type dphi_matrix = make_gradient_matrix(dphi);
             matrix_type dphi_taken  = take(dphi_matrix, row_range, col_range);
             vector_type dphi_ruh    = dphi_taken * ruh;
-            vector_type xi = tsr.siglam.col(j)  +  m_alpha * dphi_ruh;
+            vector_type xi = tsr.siglam.col(j)  +  pst.alpha * dphi_ruh;
             auto  xi_norm  = xi.norm();
             vector_type gamma =   vector_type::Zero(mesh_type::dimension);
 
-            if(xi_norm > m_yield)
-                gamma = m_method_coef * (xi_norm - m_yield) * (xi / xi_norm);
+            if(xi_norm > pst.yield)
+                gamma = m_method_coef * (xi_norm - pst.yield) * (xi / xi_norm);
 
-            tsr.siglam.col(j) += m_alpha * ( dphi_ruh - gamma );
+            tsr.siglam.col(j) += pst.alpha * ( dphi_ruh - gamma );
             tsr.gamma.col(j)   = gamma;
             tsr.xi_norm(j)     = xi_norm;
         }
@@ -1309,14 +1341,14 @@ public:
         matrix_type dphi_matrix = make_gradient_matrix(dphi);
         matrix_type dphi_taken  = take(dphi_matrix, row_range, col_range);
         vector_type dphi_ruh    = dphi_taken * ruh;
-        vector_type xi = tsr.siglam.col(offset)  +  m_alpha * dphi_ruh;
+        vector_type xi = tsr.siglam.col(offset)  +  pst.alpha * dphi_ruh;
         auto  xi_norm  = xi.norm();
         vector_type gamma =   vector_type::Zero(mesh_type::dimension);
 
-        if(xi_norm > m_yield)
-            gamma = m_method_coef * (xi_norm - m_yield) * (xi / xi_norm);
+        if(xi_norm > pst.yield)
+            gamma = m_method_coef * (xi_norm - pst.yield) * (xi / xi_norm);
 
-        tsr.siglam.col(offset) += m_alpha * ( dphi_ruh - gamma );
+        tsr.siglam.col(offset) += pst.alpha * ( dphi_ruh - gamma );
         tsr.gamma.col(offset)   = gamma;
         tsr.xi_norm(offset)     = xi_norm;
 
@@ -1333,7 +1365,8 @@ compute(const mesh_type& msh,
              const cell_type& cl,
              const matrix_type& rec_oper,
              const vector_type& uh_TF,
-             const Solution& solution )
+             const plasticity_data<T>& pst,
+             const Solution& solution)
 {
     // Diffusion
 
@@ -1387,12 +1420,12 @@ compute(const mesh_type& msh,
         matrix_type dphi_rec    =   dphi_taken * rec_oper;
 
         //( Dv_T, sigma - alpha* gamma)_T
-        if(m_hho == 2)
+        if(pst.hho == 2)
         {
             matrix_type dphi_    = take(dphi_matrix, row_range, cell_range);
             rhs_c.head(num_cell_dofs)  += qp.weight() * dphi_.transpose() * solution.st( qp.point(), number);
         }
-        else if(m_hho == 1)
+        else if(pst.hho == 1)
             rhs_m1 += qp.weight() * dphi_rec.transpose()  * solution.st( qp.point(), number);
         else
             throw std::invalid_argument("Invalid discretization name for the plasticity term. Review the name in parametes.txt or pst.hho");
@@ -1467,7 +1500,7 @@ compute(const mesh_type& msh,
             scalar_type p1_c  =  make_prod_stress_n( str , n);
             scalar_type p1_f  =  make_prod_stress_n( str_f , n);
 
-            if(m_hho == 2)
+            if(pst.hho == 2)
             {
                 //#if 0
                 // ( (sigma - alpha*gamma) * n, vT )_F
@@ -1513,9 +1546,9 @@ compute(const mesh_type& msh,
     if(offset != cont)
         throw std::invalid_argument("Invalid indices in storing values at Gauss points");
 
-    if(m_hho == 1)
+    if(pst.hho == 1)
         return rhs_m1;
-    else if(m_hho == 2)
+    else if(pst.hho == 2)
         return rhs_m2;
     else
         throw std::invalid_argument("Invalid discretization name for the plasticity term. Review the name in parametes.txt or pst.hho");
@@ -1710,12 +1743,17 @@ struct circular_tuyau<T,2>: public solution<T,2>
     typedef typename solution<T,2>::point_type      point_type;
     typedef typename solution<T,2>::gradient_vector gradient_vector;
 
+    typedef std::function<T (const point_type & p, const size_t n)> nfunction;
+    typedef std::function<gradient_vector(const point_type & p,const size_t n)>
+                                                                         ndfunction;
 
+    #if 0
     bool            is_exact;
     function        f,sf;
     dfunction       df;
     std::string     name;
     std::string     identity;
+
     circular_tuyau(plasticity_data<T>& pst)
     {
         is_exact = true;
@@ -1765,6 +1803,8 @@ struct circular_tuyau<T,2>: public solution<T,2>
             return ret;
         };
     };
+
+
     circular_tuyau(plasticity_data<T>& pst, const std::string& name)
     {
         is_exact = true;
@@ -1808,6 +1848,64 @@ struct circular_tuyau<T,2>: public solution<T,2>
 
             ret = (0.5*pst.f*R*R/pst.mu)*ret;
             return ret;
+        };
+    };
+    #endif
+
+    bool            is_exact;
+    function        f;
+    nfunction       sf;
+    ndfunction      df,st;
+    std::string     name;
+    std::string     identity;
+
+
+    circular_tuyau(plasticity_data<T>& pst, const std::string& name)
+    {
+        is_exact = false;
+        identity = "square";
+        pst.f = 1.;
+        T   R = 1.; // this should be read from the mesh
+        f  = [pst](const point_type& p) -> T {
+            T ret = 1.;
+            return ret;
+        };
+        sf = [R,pst](const point_type& p, const size_t number) -> T {
+            T  ret = 0;
+            T    r = std::sqrt(p.x()*p.x() + p.y()*p.y());
+            T   Bi = 2. * pst.yield/(pst.f * R);
+
+            if(r/R > Bi)
+                ret = 0.5*(1. - (r/R)*(r/R)) - Bi*(1. - r/R);
+            else
+                ret = 0.5*(1. - Bi)*(1. - Bi);
+
+            ret = (0.5*pst.f*R*R/pst.mu)*ret;
+            return ret;
+        };
+        df = [R,pst](const point_type& p, const size_t number) -> gradient_vector {
+
+            gradient_vector ret   = gradient_vector::Zero();
+
+            T    r = std::sqrt(p.x()*p.x() + p.y()*p.y());
+            T   Bi = 2.*pst.yield/(pst.f*R);
+
+            if(r/R >= Bi)
+            {
+                T dfdr =  - r/(R*R) + Bi/R;
+                T drdx =  p.x()/r;
+                T drdy =  p.y()/r;
+                ret(0) = dfdr*drdx;
+                ret(1) = dfdr*drdy;
+            }
+
+            ret = (0.5*pst.f*R*R/pst.mu)*ret;
+            return ret;
+        };
+        st = [&](const point_type& p, const size_t number) -> gradient_vector {
+
+            throw std::invalid_argument("st function is not intended for circular_tuyau problem. Review solution definition and parameters.txt");
+            return gradient_vector::Zero();
         };
     };
 

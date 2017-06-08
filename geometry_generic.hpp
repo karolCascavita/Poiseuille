@@ -268,6 +268,8 @@ measure(const generic_mesh<T,2>& msh, const typename generic_mesh<T,2>::cell& cl
 {
     auto pts = points(msh, cl);
 
+
+
     T acc{};
     for (size_t i = 1; i < pts.size() - 1; i++)
     {
@@ -277,6 +279,29 @@ measure(const generic_mesh<T,2>& msh, const typename generic_mesh<T,2>::cell& cl
         acc += n.norm() / T(2);
     }
 
+    auto vts_ids = msh.get_vertices_ids(cl);
+    std::vector<point<T,2>> vts(vts_ids.size());
+    size_t i = 0;
+    for(auto id: vts_ids)
+        vts.at(i++) = pts.at(id);
+
+    T acc_v{};
+    for (size_t i = 1; i < vts.size() - 1; i++)
+    {
+        auto u = (vts.at(i) - vts.at(0)).to_vector();
+        auto v = (vts.at(i+1) - vts.at(0)).to_vector();
+        auto n = cross(u, v);
+        acc_v += n.norm() / T(2);
+    }
+
+    if(std::abs(acc_v -acc) > 10.e-10)
+    {
+        std::cout << "cell :"<< cl.get_id() << std::endl;
+        std::cout << "diff :"<< std::abs(acc_v -acc)<< std::endl;
+        std::cout << "area :"<< acc << std::endl;
+        std::cout << "area without hanging_nodes :"<< acc_v << std::endl;
+        throw std::logic_error("Areas are not the same, review get_vertices!!");
+    }
     return acc;
 }
 
