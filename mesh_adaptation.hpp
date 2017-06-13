@@ -1457,7 +1457,8 @@ public:
                 auto cl    = *std::next(msh.cells_begin() , size_t(cl_id));
                 auto tsr   =  tsr_vec.at(cl_id);
                 auto m_T   =  measure(msh, cl);
-                auto h_T   =  diameter(msh, cl);
+                auto vts       =  msh.get_vertices(cl, pts);
+                auto h_T       =  diameter(msh, vts);
                 auto n     =  normal(msh, cl, fc);
 
                 Cg.at(ii)  = Cp * Cp  +  varpi * (Ct/m_T) * h_T * h_T;
@@ -1924,7 +1925,9 @@ public:
             auto c_faces   =  faces(msh, cell);
             auto c_tsr     =  tsr_vec.at(cell_id);
             auto meas_T    =  measure( msh, cell);
-            auto h_T       =  diameter(msh, cell);
+            auto pts       =  points(msh,cell);
+            auto vts       =  msh.get_vertices(cell, pts);
+            auto h_T       =  diameter(msh, vts);
             auto num_faces =  c_faces.size();
 
             vector_type c_uh_TF   =  Uh_Th.at(cell_id);
@@ -2428,7 +2431,8 @@ public:
             auto cell_id   =  cell.get_id();
             auto c_faces   =  faces(msh, cell);
             auto meas_T    =  measure( msh, cell);
-            auto h_T       =  diameter(msh, cell);
+            auto vts       =  msh.get_vertices(cell, pts);
+            auto h_T       =  diameter(msh, vts);
             auto num_faces =  c_faces.size();
 
             auto pts = points(msh,cell);

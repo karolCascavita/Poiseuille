@@ -348,6 +348,8 @@ public:
     matrix_type
     compute(const mesh_type& msh, const cell_type& cl, const matrix_type& gradrec_oper)
     {
+        auto pts = points(msh,cl);
+
         matrix_type mass_mat = matrix_type::Zero(cell_basis.size(), cell_basis.size());
 
         auto cell_quadpoints = cell_quadrature.integrate(msh, cl);
@@ -388,7 +390,9 @@ public:
         {
             auto current_face_range = dsr.face_range(face_i);
             auto fbs = current_face_range.size();
-            auto h = diameter(msh, /*fcs[face_i]*/cl);
+            auto vts = msh.get_vertices(cl, pts);
+            //auto h = diameter(msh, /*fcs[face_i]*/cl);
+            auto h = diameter(msh, /*fcs[face_i]*/vts);
             auto fc = fcs[face_i];
 
             matrix_type face_mass_matrix    = matrix_type::Zero(fbs, fbs);

@@ -1417,7 +1417,8 @@ postprocess(const  mesh<T,DIM,Storage>&  msh,
     er.u_uh     = std::sqrt(er.u_uh);
     er.Iu_uh    = std::sqrt(er.Iu_uh);
     er.Du_Guh   = std::sqrt(er.Du_Guh);
-//    auto diam   = diameter(msh , cl);
+//            auto vts       =  msh.get_vertices(cl, pts);
+//            auto h_T       =  diameter(msh, vts);
 
 //    std::cout << "Mesh diameter: " << diam << std::endl;
     #if 0
@@ -1511,15 +1512,21 @@ postprocess(const  mesh<T,DIM,Storage>&  msh,
     effs << "   col = 5"<<std::endl;
     effs << "end"<<std::endl;
 
-    effs << "draw_error = true"<<std::endl;
     effs << "draw_mesh  = true"<<std::endl;
+    effs << "draw_error = true"<<std::endl;
+    effs << "draw_estimator = true"<<std::endl;
+
     effs << "print_mesh = false"<<std::endl;
     effs << "print_error= false"<<std::endl;
+    effs << "print_estimator = false"<<std::endl;
+
     effs << "error_name = 'nothing'"<<std::endl;
     effs << "execute" + mp.summary<<std::endl;
     effs << "if print_error == true "<<std::endl;
     effs << "   name = strcat(error_name,'"<<mp.summary + ".png')"<<std::endl;
     effs << "   legend('-DynamicLegend')" <<std::endl;
+    effs << "   set(gca,'box','on'); set(gcf,'color','w');"<<std::endl;
+    effs << "   set(gca,'fontsize',18); set(gca,'xgrid', 'on', 'ygrid', 'on');"<<std::endl;
     effs << "   print -dpng name" <<std::endl;
     effs << "end"<<std::endl;
     effs.close();
@@ -1532,16 +1539,31 @@ execute(std::ofstream & exfs,
         const MeshParameters& mp,
         const size_t imsh)
 {
+    exfs<< "if draw_estimator == true"<<std::endl;
+    exfs<< "figure;estimator_tot"<<mp.summary<<"_RC"<<imsh<<";";
+    exfs<< "if print_estimator == true;";
+    exfs<< "set(gca,'box','on'); set(gcf,'color','w');set(gca,'fontsize',18);"<<std::endl;
+    exfs<< "print -dpng estimator_"<<mp.summary<<"_RC"<<imsh<<"; end;"<<std::endl;
+    exfs<< "figure;estimator_res"<<mp.summary<<"_RC"<<imsh<<";";
+    exfs<< "if print_estimator == true;";
+    exfs<< "print -dpng estimator_res"<<mp.summary<<"_RC"<<imsh<<"; end;"<<std::endl;
+    exfs<< "figure;estimator_str_"<<mp.summary<<"_RC"<<imsh<<";";
+    exfs<< "if print_estimator == true;";
+    exfs<< "print -dpng estimator_str"<<mp.summary<<"_RC"<<imsh<<"; end;"<<std::endl;
+    exfs<< "end"<<std::endl;
+
     exfs<< "if draw_error == true "<<std::endl;
     exfs<< "e"<< imsh <<"= load('error"<<mp.summary<<"_R"<<imsh<<".dat');"<<std::endl;
-    exfs << "figure(20); hold on; loglog(e"<<imsh<<"(:,1),e"<<imsh<<"(:,col), 'DisplayName', 'step "<<imsh<<"' , 'color', rand(1,3));"<<std::endl;
+    exfs<< "figure(100); hold on; loglog(e"<<imsh<<"(:,1),e"<<imsh<<"(:,col), 'DisplayName', 'step "<<imsh<<"' , 'color', rand(1,3));"<<std::endl;
+    exfs<< "set(gca,'box','on'); set(gcf,'color','w');"<<std::endl;
+    exfs<< "set(gca,'fontsize',18); set(gca,'xgrid', 'on', 'ygrid', 'on');"<<std::endl;
     exfs<< "end" << std::endl;
 
     exfs<< "if draw_mesh == true "<<std::endl;
-    exfs<< "figure("<<imsh+1<<")"<<std::endl;
-    exfs<< "mesh"<<mp.summary<<"_R" <<imsh<<std::endl;
-    exfs<< "if print_mesh == true "<<std::endl;
-    exfs<< "print -dpng mesh"<<mp.summary<<"_R" <<imsh<<".png;"<<std::endl;
+    exfs<< "figure; mesh"<<mp.summary<<"_R" <<imsh<<";";
+    exfs<< "if print_mesh == true;";
+    exfs<< "set(gca,'box','on'); set(gcf,'color','w');set(gca,'fontsize',18);"<<std::endl;
+    exfs<< "print -dpng -r400 mesh"<<mp.summary<<"_R" <<imsh<<".png;";
     exfs << "end"<<std::endl;
     exfs << "end"<<std::endl;
 }
