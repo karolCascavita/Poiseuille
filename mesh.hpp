@@ -339,33 +339,68 @@ public:
     size_t  faces_size() const { return this->backend_storage()->edges.size(); }
 
     bool
-    is_special_cell(typename cell::id_type id) const
+    is_special_cell(typename cell::id_type& id) const
     {
+        //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        //This is only for triangles adaptation this must to be leave out for quadrilaterals
+        #if 0
+        bool check = false;
+        if( this->backend_storage()->surfaces.at(id).size() > 3 )
+            check = true;
+        if(check != this->backend_storage()->special_surfaces.at(id).first)
+        throw std::logic_error("Check is_special_cell, since cell is not considered has triangle. This is only for testing the right performance oh this functon for triangles ");
+        #endif
+    //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
         return this->backend_storage()->special_surfaces.at(id).first;
     }
     bool
     is_special_cell(const cell& cl) const
     {
-        auto id = cl.get_id();
+        typename cell::id_type id = cl.get_id();
+
+        //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        //This is only for triangles adaptation this must to be leave out for quadrilaterals
+        #if 0
+        bool check = false;
+        if(cl.subelement_size() > 3 ) // Only when working with triangles !!!
+            check = true;
+        if(check != this->backend_storage()->special_surfaces.at(id).first)
+            throw std::logic_error("Check is_special_cell, since cell is not considered has triangle. This is only for testing the right performance oh this functon for triangles ");
+        #endif
+        //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
         return this->backend_storage()->special_surfaces.at(id).first;
     }
     std::vector<typename point_type::id_type>
-    get_vertices_ids(typename cell::id_type id) const
+    get_vertices_pos(typename cell::id_type& id) const
     {
         auto sp =  this->backend_storage()->special_surfaces.at(id);
+
+        #if 0
+        if(sp.second.size() > 3 )
+            throw std::logic_error("vertices ids are bigger than 3. Check get_vertices_pos or take this out when starting with quadrilaterals");
+        #endif
+
         return sp.second;
     }
 
     std::vector<typename point_type::id_type>
-    get_vertices_ids(const cell& cl) const
+    get_vertices_pos(const cell& cl) const
     {
         auto id = cl.get_id();
         auto sp =  this->backend_storage()->special_surfaces.at(id);
+
+        #if 0
+        if(sp.second.size() > 3 )
+            throw std::logic_error("vertices ids are bigger than 3. Check get_vertices_pos or take this out when starting with quadrilaterals");
+        #endif
+
         return sp.second;
     }
 
     std::vector<point_type>
-    get_vertices(typename cell::id_type id , const std::vector<point_type>& pts) const
+    get_vertices(typename cell::id_type& id , const std::vector<point_type>& pts) const
     {
         typedef std::pair<bool, std::vector<typename point_type::id_type>> pair;
         pair sp =  this->backend_storage()->special_surfaces.at(id);
@@ -375,6 +410,10 @@ public:
         size_t i = 0;
         for(auto& id: vertices_ids)
             vertices.at(i++) = pts.at(id);
+        #if 0
+        if(vertices.size() > 3 )
+                throw std::logic_error("vertices are bigger than 3. Check get_vertices or take this out when starting with quadrilaterals");
+        #endif
 
         return vertices;
     }
@@ -384,13 +423,29 @@ public:
         typedef std::pair<bool, std::vector<typename point_type::id_type>> pair;
 
         auto id = cl.get_id();
-        pair sp =  this->backend_storage()->special_surfaces.at(id);
-        std::vector<typename point_type::id_type>  vertices_ids = sp.second;
+        auto sp =  this->backend_storage()->special_surfaces.at(id);
+        auto vertices_ids = sp.second;
+        #if 0
+        std::cout << "vts_ids 2: [";
+        for(auto& p : vertices_ids)
+            std::cout << p << " ";
+        std::cout << "]" << std::endl;
+
+
+        std::cout << "vertices 2: [";
+        for(auto& p : vertices)
+            std::cout << p.x() << " "<< p.y() <<std::endl;
+        std::cout << "]" << std::endl;
+        #endif
         std::vector<point_type> vertices(vertices_ids.size());
 
         size_t i = 0;
-        for(auto& id: vertices_ids)
+        for(auto id: vertices_ids)
             vertices.at(i++) = pts.at(id);
+        #if 0
+        if(vertices.size() > 3 )
+            throw std::logic_error("vertices are bigger than 3. Check get_vertices or take this out when starting with quadrilaterals");
+        #endif
 
         return vertices;
     }
@@ -691,8 +746,17 @@ dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename, cons
     std::ofstream ofs(filename);
     if (!ofs.is_open())
         std::cout << "Error opening file"<<std::endl;
+
+    ofs << " hold on"<<std::endl;
     for (auto cl : msh)
     {
+
+        auto b  = barycenter(msh,cl);
+        auto id = msh.lookup(cl);
+        ofs<< "plot( "<< b.x() << ", " << b.y() <<",'r');"<<std::endl;
+        ofs<< "str = strtrim(cellstr(num2str("<< vec.at(id) <<",'(%d)')));"<<std::endl;
+        ofs<< "text("<<b.x()<< ","<< b.y() <<",str,'VerticalAlignment','bottom');"<<std::endl;
+
         auto fcs = faces(msh, cl);
         for (auto fc : fcs)
         {
@@ -738,6 +802,8 @@ dump_to_matlab(const Mesh<T, 2, Storage>& msh, const std::string& filename,
     std::ofstream ofs(filename);
     if (!ofs.is_open())
         std::cout << "Error opening file"<<std::endl;
+
+    ofs << " hold on"<<std::endl;
     for (auto cl : msh)
     {
         ofs << " hold on"<<std::endl;

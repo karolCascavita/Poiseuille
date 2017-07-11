@@ -170,8 +170,7 @@ face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
     }
     else
     {
-        auto cell_id =cell.get_id();
-
+        auto cell_id = cell.get_id();
         for(auto& cl : msh)
         {
             auto fcs   = faces(msh,cl);
@@ -182,6 +181,9 @@ face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
             if( itor != fcs.end() && !(face < *itor) && (neighbor_id != cell_id))
                 return neighbor_id;
         }
+        std::cout << "cell : "<< cell.get_id() << std::endl;
+        std::cout << "face : "<< msh.lookup(face) << std::endl;
+
         throw std::logic_error(" Not neighbor found");
     }
 }
@@ -194,7 +196,6 @@ check_older_msh(const generic_mesh<T, DIM>& msh)
 {
     auto storage = msh.backend_storage();
     auto points  = storage ->points;
-
     std::cout << "/ **************** POINTS        **************** /" << std::endl;
     for(auto& p: points)
         std::cout << "      "<< p << std::endl;
@@ -247,7 +248,9 @@ check_older_msh(const generic_mesh<T, DIM>& msh)
 
     for(auto& cl : msh)
     {
-        std::cout << "cell : "<< msh.lookup(cl)<< "      ; nodes :";
+        auto id = msh.lookup(cl);
+        std::cout << "cell : "<< id << "      ; nodes :  ("<< storage->special_surfaces.at(id).first;
+        std::cout << ")" ;
         auto nodes  = cl.point_ids();
 
         for(auto& p : nodes)
@@ -268,6 +271,8 @@ measure(const generic_mesh<T,2>& msh, const typename generic_mesh<T,2>::cell& cl
 {
     auto pts = points(msh, cl);
 
+
+
     T acc{};
     for (size_t i = 1; i < pts.size() - 1; i++)
     {
@@ -277,6 +282,29 @@ measure(const generic_mesh<T,2>& msh, const typename generic_mesh<T,2>::cell& cl
         acc += n.norm() / T(2);
     }
 
+    auto vts_ids = msh.get_vertices_pos(cl);
+    std::vector<point<T,2>> vts(vts_ids.size());
+    size_t i = 0;
+    for(auto id: vts_ids)
+        vts.at(i++) = pts.at(id);
+
+    T acc_v{};
+    for (size_t i = 1; i < vts.size() - 1; i++)
+    {
+        auto u = (vts.at(i) - vts.at(0)).to_vector();
+        auto v = (vts.at(i+1) - vts.at(0)).to_vector();
+        auto n = cross(u, v);
+        acc_v += n.norm() / T(2);
+    }
+
+    if(std::abs(acc_v -acc)/acc > 1.e-4)
+    {
+        std::cout << "cell :"<< cl.get_id() << std::endl;
+        std::cout << "diff :"<< std::abs(acc_v -acc)<< std::endl;
+        std::cout << "area :"<< acc << std::endl;
+        std::cout << "area without hanging_nodes :"<< acc_v << std::endl;
+        throw std::logic_error("Areas are not the same, review get_vertices!!");
+    }
     return acc;
 }
 
@@ -322,6 +350,19 @@ diameter(const Mesh& msh, const Element& elem)
 
     return diam;
 }
+template<typename Mesh>
+typename Mesh::scalar_type
+diameter(const Mesh& msh, const std::vector<typename Mesh::point_type>& pts)
+{
+    typename Mesh::scalar_type diam = 0.;
+
+    for (size_t i = 0; i < pts.size(); i++)
+        for (size_t j = i+1; j < pts.size(); j++)
+            diam = std::max((pts[i] - pts[j]).to_vector().norm(), diam);
+
+    return diam;
+}
+
 /* Compute the barycenter of a 2-face */
 template<typename T>
 point<T,2>

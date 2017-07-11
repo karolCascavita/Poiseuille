@@ -1,0 +1,76 @@
+template<typename Solution, typename MeshParameters>
+void
+test_ADMM_solver( mesh_type& msh,
+                disk::plasticity_data<T> pst,
+                const Solution& solution,
+                const MeshParameters& mp,
+                std::ofstream& ifs,
+                std::ofstream& tfs,
+                const size_t imsh)
+{
+    auto h_max =  disk::mesh_h_max(msh);
+    ADMM_parameters ap(h_max);
+
+    pst.alpha = ap.alpha_max;
+    pst.beta  = ap.beta_min;
+    T  old_residue = 1.;
+    int  cont = 0;
+    auto initial_Uh  = Uh_Th;
+    auto initial_tsr = tsr_vec;
+
+    for(size_t iter = 0; iter < ap.MAX_RESETS; iter++)
+    {
+
+        auto old_Uh  = Uh_Th;
+        auto old_tsr_vec = tsr_vec;
+
+        test_plasticity(msh, solution, mp, ifs, tfs, imsh);
+
+        //VARIABLE ADMM
+        auto bpair =  ADMM(residue, pst, msh, mp, old_tsr_vec, old_Uh);
+
+        // Residue convergence
+        if(bp.first)
+            break;
+
+        // Restart variables
+        if(bp.second)
+        {
+            std::cout << "¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨ RESTARTS : "<< imsh <<"-"<<iter <<" "<< cont++<<"¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨" << std::endl;
+            Uh_Th   = initial_Uh;
+            tsr_vec = initial_tsr;
+        }
+
+    }
+    return;
+}
+
+template< typename TensorType, typename MeshParameters >
+auto ADMM(  T& old_residue,
+            disk::plasticity_parameters<T>& pst,
+            const mesh_type& msh,
+            const MeshParameters& mp,
+            const std::vector<TensorType> & old_tsr_vec,
+            const std::vector<vector_type>& old_Uh)
+{
+    auto ret = std::make_pair(false, false);
+
+    auto residue = ADMM_convergence(msh, tsr_vec, old_tsr_vec,
+                                         Uh_Th,   old_Uh, pst.alpha);
+
+    ret.first = (residue < ap.tol);
+
+    if(ret.first)
+        std::cout <<"RESIDUE CONVERGENCE" << std::endl;
+    else
+    {
+        ret.second  = reset_algorithm_parameters(pst, ap, old_residue, residue);
+
+        std::cout << "/***************** ADMM " << imsh <<"-"<<iter<<" ******************/" << std::endl;
+        std::cout << "* alpha :" << pst.alpha << std::endl;
+        std::cout << "* beta  :" << pst.beta << std::endl;
+    }
+    old_residue = residue;
+
+    return ret;
+}
