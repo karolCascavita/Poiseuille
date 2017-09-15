@@ -683,7 +683,7 @@ class plasticity2
     tensors2<mesh_type>         m_stress_Th;
 
     plasticity2(const size_t& degree, const size_t& quad_degree,
-                const plasticity_data<T> pst_data): pst(pst_data),
+                const plasticity_data<T>& pst_data): pst(pst_data),
                                     m_degree(degree)
     //WK: for mu as tensor one should check this part
     {
