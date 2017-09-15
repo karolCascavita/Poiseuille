@@ -28,6 +28,7 @@ class quadrature<generic_mesh<T,2>, typename generic_mesh<T,2>::cell>
 {
     size_t                                          m_order;
     std::vector<std::pair<point<T,2>, T>>           m_quadrature_data;
+    std::vector<std::pair<bool,point<T,2>>>         m_special_polygons;
 
 public:
     typedef generic_mesh<T,2>                       mesh_type;
@@ -101,8 +102,59 @@ private:
 
         return ret;
     }
+    template<typename PtA>
+    std::vector<quadpoint_type>
+    integrate_quad_symmetric(const mesh_type& msh, const cell_type& cl,
+                       const PtA& pts) const
+    {
+        std::vector<std::pair<point<T,1>, T>> m_quadrature_data_sqr;
+        m_quadrature_data_sqr = edge_quadrature<T>(m_order);
 
+        auto meas       = measure(msh, cl);
 
+        assert(pts.size() == 4);
+
+        size_t qd_size = m_quadrature_data_sqr.size();
+        //std::cout << "qd_size = "<< qd_size << std::endl;
+        //std::cout << "measure = "<< meas << std::endl;
+        std::vector<std::pair<point<T,2>, T>> qd;
+        qd.reserve(qd_size * qd_size);
+
+        for (size_t i = 0; i < qd_size; i++)
+        {
+            auto px = m_quadrature_data_sqr[i].first;
+            auto wx = m_quadrature_data_sqr[i].second;
+
+            for (size_t j = 0; j < qd_size; j++)
+            {
+                auto py = m_quadrature_data_sqr[j].first;
+                auto wy = m_quadrature_data_sqr[j].second;
+
+                auto pt = point<T,2>({px[0], py[0]});
+                auto wt = wx * wy;
+
+                qd.push_back( std::make_pair(pt, wt) );
+            }
+        }
+
+        auto tr = [&](const std::pair<point<T,2>, T>& qd) -> auto {
+
+            auto xi  = qd.first.x();
+            auto eta = qd.first.y();
+
+            auto point =(pts[0]*( 1. - xi) * (1. - eta) +
+                         pts[3]*( 1. - xi) * eta  +
+                         pts[1]* xi  * (1. - eta) +
+                         pts[2]* xi  *  eta );
+
+            auto weight = qd.second * meas;
+            return make_qp(point, weight);
+        };
+        std::vector<quadpoint_type> ret;
+        ret.resize(qd_size * qd_size);
+        std::transform(qd.begin(), qd.end(), ret.begin(), tr);
+        return ret;
+    }
 //#define OPTIMAL_TRIANGLE_NUMBER
 
     /* The 'optimal triangle number' version gives almost the same results
@@ -188,6 +240,14 @@ private:
         return ret;
     }
 #endif
+    template<typename N>
+    void
+    sort_uniq(std::vector<N>& v)
+    {
+        std::sort(v.begin(), v.end());
+        auto uniq_iter = std::unique(v.begin(), v.end());
+        v.erase(uniq_iter, v.end());
+    }
 
 public:
     quadrature()
@@ -205,18 +265,36 @@ public:
     std::vector<quadpoint_type>
     integrate(const mesh_type& msh, const cell_type& cl) const
     {
-        auto pts        = points(msh, cl);
+        /*WK:  This is ok if there are hanging nodes, otherwise it would be
+                unnecessary and costly. One alternative is to bring the variable
+                "hanging nodes" and do:
 
-        switch(pts.size())
+                if (num_pts > 3 & hanging_nodes)
+                    vertices   = verify_polygon(msh, cl, pts);
+                else
+                    vertices   = pts;
+                    else
+                or just pust in the specialization hanging_nodes
+        */
+
+        auto pts      = points(msh, cl);
+        std::vector<point_type> vertices;
+
+        if( msh.is_special_cell(cl) ) // &  hanging nodes)
+            vertices = msh.get_vertices(cl , pts);
+        else
+            vertices = pts;
+
+        switch(vertices.size())
         {
             case 3:
-                return integrate_triangle(msh, cl, pts);
+                return integrate_triangle(msh, cl, vertices);
 
             case 4:
-                return integrate_quad(msh, cl, pts);
+                return integrate_quad_symmetric(msh, cl, vertices);
 
             default:
-                return integrate_other(msh, cl, pts);
+                return integrate_other(msh, cl, vertices);
         }
 
         throw std::logic_error("Shouldn't have arrived here");

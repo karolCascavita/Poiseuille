@@ -388,42 +388,75 @@ private:
     std::pair<bool, std::vector<typename point_type::id_type>>
     is_special_polygon(const mesh_type& msh, const surface_type& cl)
     {
+        //std::cout << "INSIDE is_special_polygon" << std::endl;
         auto pts  = points(msh,cl);
-        auto nonc_pts = pts;
-         auto fcs = faces(msh, cl);
-         std::vector<std::array<T,2>> ns(fcs.size());
-         size_t i = 0;
-         for(auto& fc : fcs)
-         {
-             auto n = normal(msh,cl,fc);
-             ns.at(i)[0] = n(0);
-             ns.at(i)[1] = n(1);
-             i++;
-         }
-        std::sort(ns.begin(), ns.end());
-        auto uniq_iter = std::unique(ns.begin(), ns.end(),[](std::array<T,2>& l, std::array<T,2>& r)
-            {return std::sqrt(std::pow((l[0] - r[0]),2.) + std::pow((l[1] - r[1]),2.)) < 1.e-10; });
-        ns.erase(uniq_iter, ns.end());
+        auto num_pts = pts.size();
+        auto fcs = faces(msh, cl);
+        std::vector<std::array<T,2>> ns(fcs.size());
+        size_t i = 0;
+        for(auto& fc : fcs)
+        {
+            auto n = normal(msh,cl,fc);
+            ns.at(i)[0] = n(0);
+            ns.at(i)[1] = n(1);
+            i++;
+        }
+        #if  0
+        std::cout << "CELL : "<< cl.get_id() << std::endl;
+        std::cout << " * points size: "<< pts.size() << std::endl;
+        std::cout << " * points:  " << std::endl;
+        for(auto p : pts )
+        std::cout << "  "<< p.x() << " "<< p.y() << std::endl;
+        std::cout << " * normals:  " << std::endl;
+        for(auto n : ns )
+        std::cout << "  "<< n[0] << " "<< n[1] << std::endl;
+        #endif
+        size_t hanging_count = 0;
+        for (size_t i = 0; i < num_pts; i++)
+        {
+            auto l = ns.at(i);
+            auto r = ns.at(( i + 1 )% num_pts);
+
+            if( std::abs((l[0]*r[0] + l[1]*r[1]) - T(1)) < 1.e-5)
+                hanging_count++;
+        }
+        if(hanging_count > pts.size())
+            throw std::logic_error(" More than one hanging node by face. Check correct counting of hanging nodes.");
+        size_t num_vertices = pts.size() - hanging_count;
+        if(num_vertices <= 0)
+            throw std::logic_error(" Number of vertices are <= 0. Check correct counting of hanging nodes.");
+
+        //std::cout << "num_vertices : "<< num_vertices << std::endl;
+
          //Identify vertices
-         std::vector<typename point_type::id_type> vertices(ns.size());
-         auto num_pts = pts.size();
+         std::vector<typename point_type::id_type> vertices( num_vertices);
+
          size_t vcount = 0;
          for(size_t i = 0; i < num_pts; i++)
          {
              size_t idx = (i == 0)? num_pts - 1 : i - 1 ;
-             auto pb = pts.at(idx);
-             auto p  = pts.at(i);
-             auto pf = pts.at((i + 1) % num_pts);
 
-             auto u  = (pb - p).to_vector();
-             auto v  = (pf - p).to_vector();
-             auto uxv_norm = cross(u, v).norm();
-
-             if(uxv_norm > 1.e-10)
-                 vertices.at(vcount++) =  typename point_type::id_type(i);
+             auto l = ns.at(idx);
+             auto r = ns.at(i);
+             #if 0
+             std::cout << "* n1 : "<< l[0] << " "<< l[1] << std::endl;
+             std::cout << "* n2 : "<< r[0] << " "<< r[1] << std::endl;
+             std::cout << "* product -1 : "<<   std::abs((l[0]*r[0] + l[1]*r[1]) - T(1)) << std::endl;
+             #endif
+             if( std::abs((l[0]*r[0] + l[1]*r[1]) - T(1)) >= 1.e-5)
+            {
+                //std::cout << "* counting   : "<< vcount  << std::endl;
+                vertices.at(vcount) =  typename point_type::id_type(i);
+                vcount++;
+            }
          }
-        if(vcount != ns.size())
-             std::logic_error(" Incorrect procedure to find vertices");
+        if(vcount != num_vertices)
+        {
+            std::cout << "vcount "<< vcount << std::endl;
+
+            throw  std::logic_error(" Incorrect procedure to find vertices");
+
+        }
 
         bool has_hang_nodes(false);
         if(vertices.size() != pts.size())
@@ -476,9 +509,6 @@ public:
 
     bool populate_mesh(mesh_type& msh)
     {
-
-
-
         std::cout << " *** POPULATING FVCA5 MESH ***" << std::endl;
         auto storage = msh.backend_storage();
 
@@ -636,10 +666,22 @@ public:
         /* Print stats */
         storage->statistics();
 
+        storage->edges_owners.resize(storage->edges.size());
+        storage->edges_owners = faces_owners(msh);
         return true;
     }
 };
 
+template<typename MeshType>
+std::vector<std::pair<int,int>>
+faces_owners(const MeshType& msh)
+{
+    auto ret = std::vector<std::pair<int,int>>(msh.faces_size());
+    size_t cont= 0;
+    for(auto fitor = msh.faces_begin(); fitor != msh.faces_end(); fitor++)
+        ret.at(cont++) = face_owner_cells_ids(msh, *fitor);
+    return ret;
+}
 
 
 template<typename T, size_t N>

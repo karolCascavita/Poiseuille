@@ -29,6 +29,7 @@ struct mesh_parameters
 {
     mesh_parameters()
     {
+        start_exact = 0;
         mesh_name   = 0;
         num_remesh  = 0;
         marker_name = 2;
@@ -36,24 +37,64 @@ struct mesh_parameters
         percent     = 0.1;
         recycle     = true;
         diff        = false;
-        mark_all    = false;
+        mark_all    = false; // There is a problem here read comment
         hanging_nodes = true;
         call_mesher   = false;
     }
+    // If marl_all ==true, it cannot be used  in circular for iter == 0, that used quadrilaterals
+    // Since, we have triangles in the center, that will make hanging_nodes to appear
+    // However, since the quadrilaterals are split in triangles and doesn't support
+    // hanging nodes, the triangles made by quadrilaterals won-t see the hanging_nodes
+
     T       percent;
     int     mesh_name;
     int     num_remesh;
-    int     initial_imsh;
-    bool    hanging_nodes;
     bool    call_mesher;
+    int     initial_imsh;
     int     marker_name;
+    int     start_exact;
     bool    recycle;
+    bool    hanging_nodes;
     bool    diff;
     bool    mark_all;
     std::string     short_mesh_name;
     std::string     directory;
     std::string     summary;
+    std::string     summary_old;
+
+    friend std::ostream& operator<<(std::ostream& os, const mesh_parameters<T>& mp) {
+        os << "Mesh Parameters: "<<std::endl;
+        os << "* percent      : "<< mp.percent<< std::endl;
+        os << "* mesh_name    : "<< mp.mesh_name<< std::endl;
+        os << "* num_remesh   : "<< mp.num_remesh<< std::endl;
+        os << "* call_mesher  : "<< mp.call_mesher<< std::endl;
+        os << "* initial_imsh : "<< mp.initial_imsh<< std::endl;
+        os << "* marker_name  : "<< mp.marker_name<< std::endl;
+        os << "* recycle      : "<< mp.recycle<< std::endl;
+        os << "* hanging_nodes: "<< mp.hanging_nodes<< std::endl;
+        os << "* diffusion    : "<< mp.diff<< std::endl;
+        os << "* mark_all     : "<< mp.mark_all<< std::endl;
+        os << "* short_mesh_name: "<< mp.short_mesh_name<< std::endl;
+        os << "* directory    : "<< mp.directory<< std::endl;
+        os << "* summary      : "<< mp.summary<< std::endl;
+        os << "* summary_old  : "<< mp.summary_old<< std::endl;
+        return os;
+    }
 };
+template<typename MeshType, typename CellType, typename FaceType>
+size_t
+face_position(const MeshType& msh, const CellType& cell, const FaceType& face)
+{
+    auto c_faces = faces(msh, cell);
+    size_t   j = 0;
+    for(auto& fc : c_faces)
+    {
+        if(fc == face)
+            return j;
+        j++;
+    }
+    throw std::invalid_argument("This is a bug: face not found");
+}
 
 template<typename T, size_t DIM, typename Storage>
 std::vector<dynamic_vector<T>>
@@ -175,6 +216,30 @@ save_data(const std::vector<dynamic_matrix<T>>& vec, const std::string& filename
         ofs << std::endl;
     }
 };
+
+template <typename MeshType>
+void
+save_data(const tensors2<MeshType>& vec, const std::string& filename)
+{
+    typedef typename MeshType::scalar_type scalar_type;
+    std::ofstream ofs(filename);
+    if (!ofs.is_open())
+        std::cout << "Error opening file"<<std::endl;
+
+    ofs << vec.size()<<std::endl;
+
+    for(auto& tsr :  vec)
+    {
+        dynamic_matrix<scalar_type> m = tsr.join_all();
+        ofs << m.rows()<< " " << m.cols() << "  ";
+        for (size_t i = 0; i < m.rows(); i++)
+        {
+            for (size_t j = 0; j < m.cols();j++)
+                ofs << m(i,j) <<" ";
+        }
+        ofs << std::endl;
+    }
+};
 template <typename T>
 void
 read_data(std::vector<T>& vec, const std::string& filename)
@@ -185,6 +250,7 @@ read_data(std::vector<T>& vec, const std::string& filename)
 
     if (!ifs.is_open())
         std::cout << "Error opening file"<<std::endl;
+    std::cout << "Opening file: "<< filename <<std::endl;
 
     ifs >> elements_to_read;
     std::cout << "Attempting to read " << elements_to_read << " values" << std::endl;
@@ -209,6 +275,7 @@ read_data(std::vector<dynamic_vector<T>>& vec, const std::string& filename)
     if (!ifs.is_open())
         std::cout << "Error opening file: "<< filename <<std::endl;
 
+    std::cout << "Opening file: "<< filename <<std::endl;
     ifs >> elements_to_read;
     std::cout << "Attempting to read " << elements_to_read << " values" << std::endl;
 
@@ -243,6 +310,7 @@ read_data(std::vector<dynamic_matrix<T>>& vec, const std::string& filename)
 
     if (!ifs.is_open())
         std::cout << "Error opening file: "<< filename<<std::endl;
+    std::cout << "Opening file: "<< filename <<std::endl;
 
     ifs >> elements_to_read;
     std::cout << "Attempting to read " << elements_to_read << " values" << std::endl;
@@ -282,6 +350,7 @@ read_data(std::vector<std::pair<size_t, size_t>>& vec,
 
     if (!ifs.is_open())
         std::cout << "Error opening file: "<< filename<<std::endl;
+    std::cout << "Opening file: "<< filename <<std::endl;
 
     ifs >> elements_to_read;
     std::cout << "Attempting to read " << elements_to_read << " values" << std::endl;
@@ -297,15 +366,13 @@ read_data(std::vector<std::pair<size_t, size_t>>& vec,
         idx_transf_vec.at(icell) = value;
     }
 };
-template<typename TensorsType,  typename T>
+template<typename TensorsType, typename MeshType>
 void
-get_from_tensor(std::vector<dynamic_matrix<T>>& vec,
-                const std::vector<TensorsType>& tsr_vec,
+get_from_tensor(std::vector<punctual_tensor<MeshType>>& vec,
+                const std::vector<TensorsType> & tsr_vec,
                 const std::string& name)
 {
-    std::cout << "INSIDE get_from_tensor" << std::endl;
-    vec = std::vector<dynamic_matrix<T>>(tsr_vec.size());
-    std::cout << " * vec size: "<< vec.size() << std::endl;
+    vec = std::vector<punctual_tensor<MeshType>>(tsr_vec.size());
     size_t val = 0;
     if(name == "sigma")
         val = 1;
@@ -315,14 +382,15 @@ get_from_tensor(std::vector<dynamic_matrix<T>>& vec,
         val = 3;
     else
         std::cout << "WARNING: name not found in tensor matrix variables." << std::endl;
-
-    std::cout << " * value = "<<val << std::endl;
+    //std::cout << "INSIDE get_from_tensor" << std::endl;
+    //std::cout << " * vec size: "<< vec.size() << std::endl;
+    //std::cout << " * value = "<<val << std::endl;
     size_t i = 0;
     switch (val)
     {
         case 1:
             for(auto& tsr : tsr_vec)
-                vec.at(i++) = tsr.siglam;
+                vec.at(i++) = tsr.sigma;
             return;
         case 2:
             for(auto& tsr : tsr_vec)
@@ -338,13 +406,13 @@ get_from_tensor(std::vector<dynamic_matrix<T>>& vec,
     }
 };
 
-template<typename TensorsType,  typename T>
+template<typename TensorsType>
 void
-get_from_tensor(std::vector<T>& vec,
+get_from_tensor(std::vector<size_t>& vec,
                 const std::vector<TensorsType>& tsr_vec,
                 const std::string& name)
 {
-    vec = std::vector<T>(tsr_vec.size());
+    vec = std::vector<size_t>(tsr_vec.size());
     if(name != "quad_degree")
     {
         std::cout << "WARNING: The only scalar variable in tensor structure is";
@@ -354,7 +422,7 @@ get_from_tensor(std::vector<T>& vec,
     }
     size_t i = 0;
     for(auto& tsr : tsr_vec)
-        vec.at(i++) = tsr.quad_degree;
+        vec.at(i++) = tsr.sigma.m_quad_degree;
 };
 
 template<typename TensorsType, typename T>
@@ -378,25 +446,26 @@ put_tensor(std::vector<TensorsType>& tsr_vec,
     switch(val)
     {
         case 1:
-            for(auto& mat : vec)
-                tsr_vec.at(i++).siglam = mat;
+            for(auto mat : vec)
+                tsr_vec.at(i++).sigma.split_all(mat, 2);
             return;
         case 2:
-            for(auto& mat : vec)
-                tsr_vec.at(i++).gamma  = mat;
+            for(auto mat : vec)
+                tsr_vec.at(i++).gamma.split_all(mat, 2);
             return;
         case 3:
-            for(auto& mat : vec)
-                tsr_vec.at(i++).xi_norm = mat;
+            for(auto mat : vec)
+                tsr_vec.at(i++).xi_norm.split_all(mat, 1);
             return;
         default:
             throw std::invalid_argument("Not known name variable for tensor.");
             return;
     }
 };
-template<typename TensorsType, typename T>
+template<typename TensorsType, typename MeshType, typename T>
 void
 put_tensor(std::vector<TensorsType>& tsr_vec,
+           const MeshType& msh,
            const std::vector<T>& vec,
            const std::string& name)
 {
@@ -410,8 +479,15 @@ put_tensor(std::vector<TensorsType>& tsr_vec,
 
     size_t i = 0;
 
-    for(auto& mat : vec)
-        tsr_vec.at(i++).quad_degree = mat;
+    for(auto& cl : msh)
+    {
+        auto local_quad_degree = vec.at(i);
+        tsr_vec.at(i).sigma = punctual_tensor<MeshType>(msh, cl, local_quad_degree);
+        tsr_vec.at(i).gamma = punctual_tensor<MeshType>(msh, cl, local_quad_degree);
+        tsr_vec.at(i).xi_norm = punctual_tensor<MeshType>(msh, cl, local_quad_degree);
+        i++;
+    }
+
 
     return;
 };
@@ -421,37 +497,42 @@ put_tensor(std::vector<TensorsType>& tsr_vec,
 //2 - Fix the thing of rmc and rm
 //3 - step: imsh for levels_ancestors_vec
 //    step: imsh-1 for Uh_Th and tsr since is info on the previous mesh
+#endif
 
 template<typename T, typename InputVectorType>
 void
  load_data(InputVectorType& vec,
             const mesh_parameters<T>& mp,
             const std::string& name,
+            const std::string& R,
             const size_t step)
 {
      typedef dynamic_vector<T> vector_type;
      typedef dynamic_matrix<T> matrix_type;
 
-     auto info_other = mp.summary + "_rm" + tostr(step) +".txt";
-     std::cout << "namefile to open:  "<< mp.directory + name + info_other << std::endl;
-     read_data(vec, mp.directory + name + info_other);
+     auto info_other = mp.summary_old + "_" + R + tostr(step) +".txt";
+     auto filename   = mp.directory + name + info_other;
+     std::cout << "namefile to open:  "<<  filename << std::endl;
+     read_data(vec, filename);
  }
-#endif
 template<typename T>
 void
 load_data(std::vector<std::pair<size_t,size_t>>& levels_ancestors_vec,
                    std::vector<size_t>& index_transf,
                    const mesh_parameters<T>& mp,
-                   const size_t imsh)
+                   const std::string& name,
+                   const std::string& R,
+                   const size_t step)
 {
     typedef dynamic_vector<T> vector_type;
     typedef dynamic_matrix<T> matrix_type;
 
-    auto info = mp.summary + "_R" + tostr(imsh) +".txt";
-    std::cout << "/* namefile to open:  "<< mp.directory + "/levels" + info << std::endl;
-    read_data(levels_ancestors_vec, index_transf, mp.directory + "/levels" + info);
-    std::cout << "levels_ancestors reading succesful" << std::endl;
+    auto info_other = mp.summary_old + "_" + R + tostr(step) +".txt";
+    auto filename   = mp.directory + name + info_other;
+    std::cout << "namefile to open:  "<<  filename << std::endl;
+    read_data(levels_ancestors_vec, index_transf, filename);
 }
+#if 0
 template< typename T>
 void
 load_data(std::vector<dynamic_vector<T>>& Uh_Th,
@@ -461,18 +542,21 @@ load_data(std::vector<dynamic_vector<T>>& Uh_Th,
     typedef dynamic_vector<T> vector_type;
     typedef dynamic_matrix<T> matrix_type;
 
-    auto info = mp.summary + "_R" + tostr(imsh-1) +".txt";
+    auto info = mp.summary_old + "_R" + tostr(imsh-1) +".txt";
 
     std::cout << "/* namefile to open:  "<< mp.directory + "/Uh" + info << std::endl;
     read_data(Uh_Th , mp.directory + "/Uh"  + info);
 
     std::cout << "Uh reading succesful" << std::endl;
 }
-template<typename TensorsType, typename T>
+#endif
+template<typename TensorsType, typename MeshType, typename T>
 void
 load_data(std::vector<TensorsType>& tsr_vec,
+        const MeshType& msh,
         const mesh_parameters<T>& mp,
-        const size_t imsh)
+        const std::string& R,
+        const size_t step)
 
 {
     typedef dynamic_vector<T> vector_type;
@@ -481,10 +565,10 @@ load_data(std::vector<TensorsType>& tsr_vec,
     std::vector<matrix_type> sigma;
     std::vector<T> quadeg;
 
-    auto info = mp.summary + "_R" + tostr(imsh-1) +".txt";
+    auto info = mp.summary_old + "_" + R + tostr(step-1) +".txt";
 
-    get_from_tensor(sigma,  tsr_vec, "sigma");
-    get_from_tensor(quadeg, tsr_vec, "quad_degree");
+    //get_from_tensor(sigma,  tsr_vec, "sigma");
+    //get_from_tensor(quadeg, tsr_vec, "quad_degree");
 
     read_data(sigma , mp.directory + "/Sigma" + info);
     read_data(quadeg, mp.directory + "/QuadDegree" + info);
@@ -495,8 +579,9 @@ load_data(std::vector<TensorsType>& tsr_vec,
 
     tsr_vec = std::vector<TensorsType>(sigma.size());
 
+    //Esto debe ir primero para que ya se tenga el grado y poder hacer split_all;
+    put_tensor(tsr_vec, msh, quadeg, "quad_degree");
     put_tensor(tsr_vec, sigma,  "sigma");
-    put_tensor(tsr_vec, quadeg, "quad_degree");
 };
 template<typename T>
 struct triangle
@@ -541,55 +626,11 @@ bool is_inside(const triangle<T>& t, const point<T,2>& pt)
     /* The threshold we're discussing this afternoon may be needed here */
     //return (u >= 0) && (v >= 0) && (u + v <= 1);
     /* The threshold we're discussing this afternoon may be needed here */
-    bool upos  = (std::abs(u) < 1.e-5 * invDenom) || ( u > 0.);
-    bool vpos  = (std::abs(v) < 1.e-5 * invDenom) || ( v > 0.);
+    bool upos  = (std::abs(u) < 1.e-5 * invDenom) || ( u > T(0));
+    bool vpos  = (std::abs(v) < 1.e-5 * invDenom) || ( v > T(0));
     bool uvpos = (std::abs(u + v - 1.) < 1.e-10) || (u + v < 1.);
 
     return (upos && vpos && uvpos);
-};
-template<typename MeshType, typename CellType>
-auto
-new_points(const MeshType& msh, const CellType& cell,
-           const size_t quad_degree, const size_t num_sig_pts)
-{
-    typedef MeshType                                    mesh_type;
-    typedef typename MeshType::cell                     cell_type;
-    typedef typename MeshType::face                     face_type;
-    typedef typename MeshType::point_type               point_type;
-    typedef disk::quadrature<mesh_type, cell_type>      cell_quad_type;
-    typedef disk::quadrature<mesh_type, face_type>      face_quad_type;
-
-    auto cq  = cell_quad_type(quad_degree);
-    auto fq  = face_quad_type(quad_degree);
-
-    auto ret = std::vector<point_type>(num_sig_pts);
-    //std::cout << "size sig_pts ("<< cell.get_id()<<") : "<< num_sig_pts << std::endl;
-    size_t cont = 0;
-
-    auto cqs  = cq.integrate(msh, cell);
-    for(auto& cq : cqs)
-        ret.at(cont++) = cq.point();
-
-    auto fcs = faces(msh, cell);
-
-    for(auto& fc :fcs)
-    {
-        auto fqs = fq.integrate(msh, fc);
-        for(auto& fq : fqs)
-            ret.at(cont++) = fq.point();
-    }
-
-    auto pts = points(msh, cell);
-
-    for(auto& p : pts)
-        ret.at(cont++) = p;
-
-    for(auto& fc :fcs)
-        ret.at(cont++) = barycenter(msh, fc);
-
-    ret.at(cont) = barycenter(msh, cell);
-
-    return ret;
 };
 template<typename T>
 auto
@@ -641,89 +682,206 @@ trilinear_interpolation(const dynamic_matrix<T>& tensor,
     return ret;
 };
 
-template<typename TensorType, typename T, typename Storage, typename CellType>
+template<typename T,  typename Storage, typename CellType, typename PunctualTensor>
+dynamic_vector<T>
+eval_tensor_interpolation(const mesh<T,2, Storage>& msh,
+                          const CellType          & cell,
+                          const PunctualTensor    & tensor,
+                          const point<T,2>        & ep)
+{
+    typedef dynamic_matrix<T>  matrix_type;
+    dynamic_vector<T> ret = dynamic_vector<T>::Zero(2);
+    auto is_find = false;
+    auto pts   = points( msh, cell);
+    auto fcs   = faces(  msh, cell);
+    auto cell_barycenter = barycenter(msh, cell);
+
+    for(size_t ifc = 0; ifc < pts.size(); ifc++)
+    {
+        auto face  = fcs.at(ifc);
+
+        /* Terminar esto
+         for(size_t  i = 0; i < 2; i++)
+        {
+            triangle<T> t1;
+            t1.points[0]  =  cell_barycenter;
+            t1.points[i + 1]  =  pts.at(ifc);
+            t1.points[i + 2 % 2]  =  barycenter(msh, face);
+        }
+        */
+        triangle<T> t1;
+        t1.points[0]  =  cell_barycenter;
+        t1.points[1]  =  pts.at(ifc);
+        t1.points[2]  =  barycenter(msh, face);
+
+        if(is_inside(t1, ep))
+        {
+            matrix_type tsr_at_t1 = matrix_type::Zero(2,3);
+            tsr_at_t1.col(0) = tensor.cell_bar;
+            tsr_at_t1.col(1) = tensor.grid_points.col(ifc);
+            tsr_at_t1.col(2) = tensor.face_bars.col(ifc);
+
+            ret = trilinear_interpolation(tsr_at_t1, t1, ep);
+            is_find = true;
+            break;
+        }
+
+        triangle<T> t2;
+        t2.points[0]  =  cell_barycenter;
+        t2.points[1]  =  barycenter(msh, face);
+        t2.points[2]  =  pts.at((ifc + 1)% pts.size());
+
+        if(is_inside(t2, ep))
+        {
+            matrix_type tsr_at_t2 = matrix_type::Zero(2,3);
+            tsr_at_t2.col(0) = tensor.cell_bar;
+            tsr_at_t2.col(1) = tensor.face_bars.col(ifc);
+            tsr_at_t2.col(2) = tensor.grid_points.col((ifc + 1)% pts.size());
+
+            ret = trilinear_interpolation(tsr_at_t2, t2, ep);
+            is_find = true;
+            break;
+        }
+    }
+    if(!is_find)
+        throw std::logic_error("Point not found in this cell.");
+
+    return ret;
+}
+
+
+template<typename T,  typename Storage, typename CellType, typename PunctualTensor,
+        typename HangingNodeInfo>
+dynamic_vector<T>
+eval_tensor_interpolation_tri_P2(const mesh<T,2, Storage>& msh,
+                          const CellType        & cell,
+                          const PunctualTensor  & tau,
+                          const HangingNodeInfo & hgi,
+                          const point<T,2>      & ep)
+{
+
+    typedef dynamic_vector<T>  vector_type;
+    typedef dynamic_vector<T>  matrix_type;
+
+    vector_type ret = vector_type::Zero(tau.grid_points.rows());
+    auto pts = points(msh,cell);
+    auto vertices_ids = msh.get_vertices_pos(cell);
+    auto vertices     = msh.get_vertices(cell, pts);
+    assert(vertices.size() == 3);
+
+    std::array<point<T,2>, 3> vert;
+    for(size_t i = 0; i < 3; i++)
+        vert[i] = vertices[i];
+
+    //Compute coordinates r s t
+    auto triarea = [](const std::array<point<T,2>, 3>& vts) -> T
+    {
+        T acc{};
+            for (size_t i = 1; i < 2; i++)
+            {
+                auto u = (vts[i] - vts[0]).to_vector();
+                auto v = (vts[i+1] - vts[0]).to_vector();
+                auto n = cross(u, v);
+                acc += n.norm() / T(2);
+            }
+        return acc;
+    };
+
+    auto S = triarea(vert);
+
+    std::array< T, 3> coords;
+
+    for(size_t i = 0; i < 3; i++)
+    {
+        triangle<T> t;
+        t.points[0] = vertices.at((i + 1)% 3);
+        t.points[1] = vertices.at((i + 2)% 3);
+        t.points[2] = ep;
+
+        coords[i] = triarea(t.points) / S;
+    }
+    std::array< T, 6> phi;
+
+    auto r = coords[0];
+    auto s = coords[1];
+    auto t = coords[2];
+
+    //Evaluate P2 functions
+    phi[0]  =  r * ( T(2) * r - T(1));
+    phi[1]  =  s * ( T(2) * s - T(1));
+    phi[2]  =  t * ( T(2) * t - T(1));
+    phi[3]  =  T(4) * r * s;
+    phi[4]  =  T(4) * s * t;
+    phi[5]  =  T(4) * r * t;
+
+    //Compute approximation
+    auto cell_id = cell.get_id();
+    auto num_pts = number_of_faces(msh, cell);
+
+    //std::cout << "tau.grid_points.col = " << tau.grid_pts_cols() << std::endl;
+
+    for(size_t i = 0; i < 3; i++ )
+    {
+        auto vertex_pos = vertices_ids.at(i);
+        vector_type tau_vert = tau.grid_points.col(vertex_pos);
+        ret += phi[i] * tau_vert;
+
+        vector_type tau_bar = vector_type::Zero(tau.grid_points.rows());
+        if(!hgi.faces_has_hang_nodes.at(vertex_pos))
+            tau_bar = tau.face_bars.col(vertex_pos);
+        else //if(hgi.faces_has_hang_nodes.at(vertex_pos))
+        {
+            auto hang_node_pos = hgi.hang_node_pos.at((vertex_pos + 1) % num_pts);
+            assert(hang_node_pos != -1);
+            tau_bar = tau.grid_points.col(hang_node_pos);
+        }
+        ret += phi.at(i + 3) * tau_bar;
+    }
+
+    return ret;
+}
+
+
+
+
+
+template<typename TensorType, typename T, typename Storage, typename CellType,
+        typename HangingNodeInfo>
 auto
 compute_interpolation(const mesh<T,2,Storage>& msh,
-              const CellType  & cell,
-              const TensorType& tsr,
-              const std::vector<point<T,2>>& pts_to_eval_sigma)
+                      const mesh<T,2,Storage>& old_msh,
+                      const CellType  & cell,
+                      const CellType  & ancestor_cell,
+                      const TensorType& tsr,
+                      const HangingNodeInfo& hgi)
 {
     typedef mesh<T,2,Storage>   mesh_type;
     typedef point<T,2>          point_type;
     typedef dynamic_vector<T>   vector_type;
     typedef dynamic_matrix<T>   matrix_type;
 
-    matrix_type sigma = tsr.siglam;
-
-    auto num_sig_pts = pts_to_eval_sigma.size();
-    auto num_cols    = sigma.cols();
-    matrix_type  ret = matrix_type::Zero(2, num_sig_pts);
-    auto pts   = points( msh, cell);
-    auto fcs   = faces(  msh, cell);
     auto area  = measure(msh, cell);
-    auto cell_barycenter = barycenter(msh, cell);
-    auto offset_vertex   = num_cols - 2 * pts.size() - 1;
-    auto offset_face_bar = num_cols - pts.size() - 1;
-    auto offset_cell_bar = num_cols - 1;
-
     if(area < 1.e-10)
         throw std::invalid_argument("Area < 1.e-10. Review how tiny an element could be.");
 
+    auto sigma = tsr.sigma;
+    punctual_tensor<mesh_type>  ret(msh, cell, sigma.m_quad_degree);
+    ret.Zero(2);
+    auto pts_to_eval = ret.tensor_points(msh, cell);
+    matrix_type mat  = matrix_type::Zero(2, pts_to_eval.size());
+
     size_t cont = 0;
 
-    for(auto& ep : pts_to_eval_sigma)
+    //std::cout << "sigmagrid_points.col = " << sigma.grid_pts_cols() << std::endl;
+    for(auto ep : pts_to_eval)
     {
-        assert(cont < num_sig_pts);
-
-        for(size_t ifc = 0; ifc < pts.size(); ifc++)
-        {
-            auto face  = fcs.at(ifc);
-
-            /* Terminar esto
-             for(size_t  i = 0; i < 2; i++)
-            {
-                triangle<T> t1;
-                t1.points[0]  =  cell_barycenter;
-                t1.points[i + 1]  =  pts.at(ifc);
-                t1.points[i + 2 % 2]  =  barycenter(msh, face);
-            }
-            */
-            triangle<T> t1;
-            t1.points[0]  =  cell_barycenter;
-            t1.points[1]  =  pts.at(ifc);
-            t1.points[2]  =  barycenter(msh, face);
-
-            matrix_type sig_at_vts1 = matrix_type::Zero(2,3);
-            sig_at_vts1.col(0) = sigma.col(offset_cell_bar);
-            sig_at_vts1.col(1) = sigma.col(offset_vertex   + ifc);
-            sig_at_vts1.col(2) = sigma.col(offset_face_bar + ifc);
-
-            if(is_inside(t1, ep))
-            {
-                ret.col(cont++) = trilinear_interpolation(sig_at_vts1, t1, ep);
-                break;
-            }
-
-
-            triangle<T> t2;
-            t2.points[0]  =  cell_barycenter;
-            t2.points[1]  =  barycenter(msh, face);
-            t2.points[2]  =  pts.at((ifc + 1)% pts.size());
-
-            matrix_type sig_at_vts2 = matrix_type::Zero(2,3);
-            sig_at_vts2.col(0) = sigma.col(offset_cell_bar);
-            sig_at_vts2.col(1) = sigma.col(offset_face_bar + ifc);
-            sig_at_vts2.col(2) = sigma.col(offset_vertex   + (ifc + 1)% pts.size());
-
-            if(is_inside(t2, ep))
-            {
-                ret.col(cont++) = trilinear_interpolation(sig_at_vts2, t2, ep);
-                break;
-            }
-
-
-        }
+        assert(cont < pts_to_eval.size());
+        //mat.col(cont++) = eval_tensor_interpolation(old_msh, ancestor_cell, sigma, ep);
+        mat.col(cont++) = eval_tensor_interpolation_tri_P2(old_msh, ancestor_cell, sigma, hgi, ep);
     }
+
+    ret = punctual_tensor<mesh_type>(msh, cell, sigma.m_quad_degree);
+    ret.split_all(mat, 2);
     return ret;
 };
 template<typename TensorType, typename T, typename Storage >
@@ -732,6 +890,7 @@ sigma_interpolation(const mesh<T,2,Storage>& new_msh,
                     const mesh<T,2,Storage>& old_msh,
                     const std::vector<TensorType>& tsr_vec,
                     const std::vector<size_t>& ancestors,
+                    const std::vector<size_t>& cells_marks,
                     const size_t degree)
 {
     std::cout << "INSIDE SIGMA INTERPOLATION" << std::endl;
@@ -743,25 +902,138 @@ sigma_interpolation(const mesh<T,2,Storage>& new_msh,
     std::vector<TensorType> new_tsr_vec;
     new_tsr_vec  = disk::tensor_zero_vector(new_msh, degree);
 
+    auto hang_nodes_vec = check4_special_polygons(old_msh);
     for(auto& cell : new_msh)
     {
-        auto cell_id  = cell.get_id();
+        auto cell_id        = cell.get_id();
         auto ancestor_id    = ancestors.at(cell_id);
         auto ancestor_cell  = *std::next(old_msh.cells_begin(), ancestor_id);
-        auto tsr      =  tsr_vec.at(ancestor_id);
+        auto cell_mark      = cells_marks.at(ancestor_id);
+
+        auto old_tsr      =  tsr_vec.at(ancestor_id);
         auto new_tsr  =  new_tsr_vec.at(cell_id);
-        auto num_pts  =  new_tsr.siglam.cols();
-        auto qdegree  =  tsr.quad_degree;
-        //std::cout << "quad_degree_ancestor ("<< ancestor_id<<"): "<< qdegree << std::endl;
-        auto pts_to_eval_sigma  = new_points(new_msh, cell, qdegree, num_pts);
-        matrix_type sigma = compute_interpolation(new_msh, cell, tsr, pts_to_eval_sigma);
-        new_tsr_vec.at(cell_id).siglam = sigma;
-        //std::cout << "quad_degree_cell ("<< cell_id<<")        : "<< new_tsr_vec.at(cell_id).quad_degree << std::endl;
+
+        auto hgi = hang_nodes_vec.at(ancestor_id);
+        //std::cout << " *  cell_level ("<< cell_id<<"," << ancestor_id  <<") : "<< cell_mark << std::endl;
+        //std::cout << "old_tsr.grid_points.col = " << old_tsr.sigma.grid_pts_cols() << std::endl;
+
+        if( cell_mark > 1) //Just cells to refine or its neighbors ( new hanging nodes)
+        {
+            auto sigma = compute_interpolation(new_msh, old_msh, cell, ancestor_cell, old_tsr, hgi);
+            new_tsr_vec.at(cell_id).sigma = sigma;
+        }
+        else
+            new_tsr_vec.at(cell_id).sigma = old_tsr.sigma;
     }
     return new_tsr_vec;
 };
 
+template<typename MeshType>
+struct hanging_nodes_info
+{
+    typedef typename  MeshType::point_type::id_type    id_type;
+    bool  has_hng_nodes;
+    std::vector<id_type>    vertices_ids;
+    std::vector<int>        hang_node_pos;
+    std::vector<size_t>     faces_has_hang_nodes; //faces with one of its extremes being an hanging node
+    hanging_nodes_info(){}
 
+    hanging_nodes_info(const MeshType& msh, const typename MeshType::cell& cell)
+    {
+        has_hng_nodes = false;
+        auto pts_ids  = cell.point_ids();
+        auto num_pts  = pts_ids.size();
+        vertices_ids  = std::vector<id_type>(num_pts);
+        hang_node_pos = std::vector<int>(num_pts);
+        faces_has_hang_nodes = std::vector<size_t>(num_pts);
+    }
+
+    friend std::ostream& operator<<(std::ostream& os,
+                                        const hanging_nodes_info<MeshType>&  hg)
+    {
+        std::cout << " * has_hng_nodes : "<< hg.has_hng_nodes << std::endl;
+        std::cout << " * vertices_ids  : ";
+        for(auto v: hg.vertices_ids)
+            std::cout << "  "<< v << std::endl;
+        std::cout<< std::endl;
+        std::cout << " * hang_node_pos  : ";
+        for(auto v: hg.hang_node_pos)
+            std::cout << "  "<< v << std::endl;
+        std::cout<< std::endl;
+        std::cout << " * faces_has_hang_nodes : ";
+        for(auto v: hg.faces_has_hang_nodes)
+            std::cout << "  "<< v << std::endl;
+        std::cout<< std::endl;
+
+        return os;
+    }
+};
+template<typename MeshType>
+std::vector<hanging_nodes_info<MeshType>>
+check4_special_polygons(const MeshType& msh)
+{
+    auto ret = std::vector<hanging_nodes_info<MeshType>>(msh.cells_size());
+
+    size_t i = 0;
+
+    for(auto cl : msh)
+    {
+        hanging_nodes_info<MeshType>  hgi(msh, cl);
+        if(msh.is_special_cell(cl) ) // &  hanging nodes)
+        {
+            typedef typename  MeshType::point_type::id_type    id_type;
+            auto pts     = points(msh, cl);
+            auto pts_ids = cl.point_ids();
+            auto num_pts = pts.size();
+            hgi.has_hng_nodes = true;
+
+
+            auto vertices_pos = msh.get_vertices_pos(cl);
+            for(size_t col = 0; col < vertices_pos.size(); col++)
+            {
+                auto pid_itor = std::next(pts_ids.begin(),  vertices_pos.at(col));
+                //hgi.vertices_ids.at(col)  =  *pid_itor;
+            }
+            hgi.vertices_ids = msh.get_vertices_pos(cl);
+
+            //std::cout << "num_pts : "<< num_pts << std::endl;
+            //std::cout << "*  pids : " << std::endl;
+            //for(auto&  pi:  pts_ids)
+            //    std::cout << "  "<< pi;
+            //std::cout << std::endl;
+
+
+            // Search for hanging_nodes
+            for(size_t j = 0; j < num_pts; j++)
+            {
+                //std::cout << "* ----------- j = "<<j<<"-----------*"<< std::endl;
+                bool find1 = std::binary_search(vertices_pos.begin(),
+                                                vertices_pos.end(), j);
+                bool find2 = std::binary_search(vertices_pos.begin(),
+                                    vertices_pos.end(), (j + 1)%num_pts);
+
+                hgi.hang_node_pos.at(j) = -1;
+                if( !find1 )
+                    hgi.hang_node_pos.at(j) = j; //hang_node_id.at(j) = *std::next(pts_ids.begin(), j);
+
+
+                hgi.faces_has_hang_nodes.at(j) = 0;
+                if(!find2 || !find1)
+                    hgi.faces_has_hang_nodes.at(j) = 1;
+
+                //std::cout << " ** pi    ("<<find1 <<"): "<< *std::next(pts_ids.begin(),j) << std::endl;
+                //std::cout << " ** nxt_pi("<<find2 <<"): "<< *std::next(pts_ids.begin(),(j+1)%num_pts) << std::endl;
+
+                //std::cout << " *********** hgi ("<< cl.get_id()<<") ****************" << std::endl;
+                //std::cout << hgi << std::endl;
+            }
+            //std::cout << "/* special_cell */"<< vts.size() << std::endl;
+        }
+        ret.at(i) = hgi;
+        i++;
+    }
+    return ret;
+}
 
 template<typename MeshType>
 class stress_based_mesh
@@ -789,7 +1061,7 @@ public:
     //MArking just below and above
     bool
     marker(const mesh_type& msh,
-           const std::vector<tensors<T>>& tsr_vec,
+           const std::vector<tensors<mesh_type>>& tsr_vec,
            const T& yield)
     {
         bool do_refinement = false;
@@ -822,7 +1094,7 @@ public:
     }
     bool
     marker(const mesh_type& msh,
-          const std::vector<tensors<T>>& tsr_vec,
+          const std::vector<tensors<mesh_type>>& tsr_vec,
           const T& yield,
           const T& percent)
 
@@ -832,7 +1104,9 @@ public:
 
         for(size_t i = 0; i < tsr_vec.size();i++)
         {
-            auto mat = tsr_vec.at(i).xi_norm;
+            auto xi_norm = tsr_vec.at(i).xi_norm;
+
+            dynamic_matrix<T> mat = xi_norm.all();
 
             for(size_t m = 0; m < mat.size(); m++)
             {
@@ -862,8 +1136,8 @@ public:
     }
 
     template<typename LoaderType>
-    void
-    refine(mesh_type & msh,
+    auto
+    refine(const mesh_type & msh,
            const std::string&  directory)
     {
         mesh_type re_msh;
@@ -915,7 +1189,7 @@ public:
         storage_rm->boundary_nodes.at(0) = true;
         storage_rm->boundary_nodes.at(num_rm_pts - 1) = true;
 
-        msh = re_msh;
+        return re_msh;
     }
 
 };
@@ -981,79 +1255,72 @@ public:
     std::vector<std::pair<size_t ,size_t>>        l_tesseradecagons;
     std::vector<std::pair<size_t ,size_t>>        l_pentadecagons;
 
+    std::vector< hanging_nodes_info<mesh_type>>   hang_nodes_vec;
+
     stress_based_mesh(const mesh_type& msh,
                         const std::vector<size_t>& levels_vec,
                         const plasticity_data<T>&  m_pst,
-                        const mesh_parameters<T>& msh_parameters,
+                        const mesh_parameters<T>&  msh_parameters,
                         const size_t& adaptive_step):
                         pst(m_pst),
                         mp(msh_parameters),
                         imsh(adaptive_step)
     {
         info  =  mp.summary + "_RC" + tostr(imsh);
+
+        std::cout << "Constructor sbm mp.summary :"<< mp.summary << std::endl;
+
         //check_older_msh(msh);
         cells_marks = std::vector<size_t>(msh.cells_size(),0);
         levels = levels_vec;
         level_ancestor.reserve(msh.cells_size());
+        faces_marks.resize(msh.faces_size());
 
-        // This only to mark all the cells on each adaptation (thought as a test);
-        // Comment this for normal adaptations. Also reveiw test adaptation if( imsh > 0)
-        // (remember this does a  first adaptation  to ensure only triangles).
+        for(size_t i = 0; i < faces_marks.size(); i++)
+            faces_marks.at(i).first = false;
+
+        // Marking all cells was conceived as a test
         if(mp.mark_all)
-        {
-            for(auto& cell: msh)
-            {
-                auto cell_id = cell.get_id();
-                cells_marks.at(cell_id) = 3;
-            }
-
-            for(auto& b : cells_marks)
-                std::cout<<b<<"  ";
-            std::cout  << std::endl;
-
-            // Esto creo que es necesqrio incluso para adapt 0, puesto que en ningun otro lado aparece
-            // la inicialization con el tamanho de faces_marks. No se como estaba funcionando para imsh ==0
-            faces_marks.resize(msh.faces_size());
-            for(size_t i = 0; i < faces_marks.size(); i++)
-               faces_marks.at(i).first = false;
-        }
+            cells_marks = std::vector<size_t>(msh.cells_size(),3);
         else
         {
-            //This is only to start only with triangles
+            //This refinement is aimed to start only with triangles.
             //if we want to have more polygons take out this and solve
             //the problem with the refinement_other
-            //#if 0
             if(imsh == 0)
             {
                 for(auto& cell: msh)
                 {
                     auto cell_id = cell.get_id();
-                    auto c_faces = faces(msh, cell);
-                    if(c_faces.size() > 3)
+                    auto pts = points(msh, cell);
+                    auto vts = msh.get_vertices(cell , pts);
+                    if(vts.size() > 3)
                         cells_marks.at(cell_id) = 3;
                 }
-
-                for(auto& b : cells_marks)
-                    std::cout<<b<<"  ";
-                std::cout  << std::endl;
-
             }
-            //#endif
-            else
-            {
-                faces_marks.resize(msh.faces_size());
-                for(size_t i = 0; i < faces_marks.size(); i++)
-                    faces_marks.at(i).first = false;
-            }
-            //#endif
         }
 
+        for(auto& b : cells_marks)
+            std::cout<<b<<"  ";
+        std::cout  << std::endl;
+
+        hang_nodes_vec = check4_special_polygons(msh);
+
     }
+
     template< size_t N>
     struct n_gon
     {
        std::array<size_t, N>  p;
        std::array<bool, N>    b;
+
+       friend std::ostream& operator<<(std::ostream& os,  const n_gon<N>& pol)
+       {
+           os << " Polygon points"<< std::endl;
+           for(size_t i = 0; i < N; i++)
+                os << pol.p[i] << "  ";
+           return os;
+       }
     };
 
     void
@@ -1069,7 +1336,7 @@ public:
             auto cl_level= levels.at(cl_id);
             if(!(msh.is_boundary(fc)))
             {
-                size_t ngh_id    = face_owner_cells_ids(msh, fc, cl);
+                size_t ngh_id    = msh.neighbor_id(cl, fc);
                 auto   ngh_level = levels.at(ngh_id);
 
                 if( std::abs(int(ngh_level - cl_level)) >= 2 )
@@ -1085,6 +1352,7 @@ public:
 
                     ++levels.at(search_id);
                     cells_marks.at(search_id) = 3;
+                    std::cout << " ** mark cell : "<< search_id << std::endl;
                     check_levels(msh , search_cl);
                 }
             }
@@ -1093,7 +1361,8 @@ public:
     }
     bool
     test_marker(const mesh_type& msh,
-            const T& ratio)
+                const T& ratio,
+                const size_t  imsh)
     {
         bool do_refinement = false;
 
@@ -1116,12 +1385,22 @@ public:
                 r.at(i)  = std::sqrt(pts[i].x() * pts[i].x() + pts[i].y() * pts[i].y());
             auto result  = std::minmax_element(r.begin(), r.end());
 
+            std::cout << "cell : "<< cl_id << std::endl;
+            std::cout << " * pts : ";
+            for(auto& p: pts)
+                std::cout << p <<"  ";
+            std::cout<< std::endl;
+            std::cout << " * r_max: "<< *(result.second) << std::endl;
+            std::cout << " * r_min: "<< *(result.first) << std::endl;
+
             if(*(result.second) >=  ratio )
             {
                 if (*(result.first) < ratio )
                 {
+                    std::cout << " * cell marked" << std::endl;
                     cells_marks.at(cl_id) = 3;
-                    ++levels.at(cl_id);
+                    if(imsh > 0)
+                        ++levels.at(cl_id);
                     do_refinement = true;
                 }
             }
@@ -1139,9 +1418,24 @@ public:
         return do_refinement;
     }
 
+    void
+    check_for_NaN(const std::vector<tensors<mesh_type>>& tsr_vec)
+    {
+        for(size_t i = 0; i < tsr_vec.size(); i++)
+        {
+            auto mat = tsr_vec.at(i).xi_norm.join_all();
+            for(size_t m = 0; m < mat.size(); m++)
+            {
+                if(std::isnan(mat(0,m)))
+                    throw std::logic_error("The norm of the constrain is NaN");
+            }
+        }
+        return;
+    }
+
     bool
     marker_xc(const mesh_type& msh,
-            const std::vector<tensors<T>>& tsr_vec,
+            const std::vector<tensors<mesh_type>>& tsr_vec,
             const T& yield)
     {
         typedef disk::quadrature<mesh_type, cell_type>      cell_quad_type;
@@ -1152,25 +1446,17 @@ public:
 
         cells_marks = std::vector<size_t>(msh.cells_size());
 
+        check_for_NaN(tsr_vec);
+
         for(size_t i = 0; i < tsr_vec.size();i++)
         {
-            auto quad_degree = tsr_vec.at(i).quad_degree;
-            auto cl  = *std::next(msh.cells_begin() , i);
-            auto cq  = cell_quad_type(quad_degree);
-            auto cqs_size =  cq.integrate(msh, cl).size();
-            auto num_pts  =  points(msh,cl).size();
+            auto  xi_norm = tsr_vec.at(i).xi_norm;
+            matrix_type mat1 = xi_norm.cell_quad_pts;
+            matrix_type mat2 = xi_norm.grid_points;
 
-            vector_type xi_norm = tsr_vec.at(i).xi_norm;
-            auto mat1 = xi_norm.head(cqs_size);
-            auto mat2 = xi_norm.tail(num_pts);
+            auto mat = xi_norm.all();
 
             bool in_interval(false);
-
-            for(size_t m = 0; m < xi_norm.size(); m++)
-            {
-                if(std::isnan(xi_norm(m)))
-                    throw std::logic_error("The norm of the constrain is NaN");
-            }
 
             //marker XC
             if(std::abs(mat1.minCoeff() - yield) <= 1.e-10 || std::abs(mat1.minCoeff()) < yield )
@@ -1256,22 +1542,19 @@ public:
     }
     bool
     marker_jb(const mesh_type& msh,
-            const std::vector<tensors<T>>& tsr_vec)
+            const std::vector<tensors<mesh_type>>& tsr_vec)
     {
         std::cout << "INSIDE_JB_MARKER" << std::endl;
+
+        check_for_NaN(tsr_vec);
 
         bool do_refinement(false);
         cells_marks = std::vector<size_t>(msh.cells_size());
 
         for(size_t i = 0; i < tsr_vec.size();i++)
         {
-            auto mat = tsr_vec.at(i).xi_norm;
-
-            for(size_t m = 0; m < mat.size(); m++)
-            {
-                if(std::isnan(mat(0,m)))
-                    throw std::logic_error("The norm of the constrain is NaN");
-            }
+            auto xi_norm = tsr_vec.at(i).xi_norm;
+            matrix_type mat = xi_norm.join_all();
 
             //Marking with an interval
             bool in_interval = false;
@@ -1314,22 +1597,19 @@ public:
 
     bool
     marker_m4(const mesh_type& msh,
-            const std::vector<tensors<T>>& tsr_vec)
+            const std::vector<tensors<mesh_type>>& tsr_vec)
     {
         std::cout << "INSIDE_M4_MARKER" << std::endl;
+
+        check_for_NaN(tsr_vec);
 
         bool do_refinement(false);
         cells_marks = std::vector<size_t>(msh.cells_size());
 
         for(size_t i = 0; i < tsr_vec.size();i++)
         {
-            auto mat = tsr_vec.at(i).xi_norm;
-
-            for(size_t m = 0; m < mat.size(); m++)
-            {
-                if(std::isnan(mat(0,m)))
-                    throw std::logic_error("The norm of the constrain is NaN");
-            }
+            auto xi_norm = tsr_vec.at(i).xi_norm;
+            matrix_type mat = xi_norm.join_all();
 
             //Marking with an interval
             bool in_interval_xc = false;
@@ -1420,14 +1700,15 @@ public:
         {
             //std::cout << "FACE = "<< face_i << std::endl;
             //auto current_face_range = dsr.face_range(face_i);
-            T eta_stress(0.);
+            T eta_stress(0);
             std::vector<T> Cg(2);
             auto varpi =  0.5;
             auto fc   = *(msh.faces_begin() + fc_id);
             auto fqs  = face_quadrature.integrate(msh, fc);
             auto h_F  = measure(msh, fc);
 
-            auto owner_cells = face_owner_cells_ids(msh, fc);
+
+            auto owner_cells = _vec.at(fc_id);
             std::cout<<"FACE_ID = "<< fc_id<<std::endl;
             for(size_t ii = 0; ii < owner_cells.size(); ii++)
             {
@@ -1435,7 +1716,8 @@ public:
                 auto cl    = *std::next(msh.cells_begin() , size_t(cl_id));
                 auto tsr   =  tsr_vec.at(cl_id);
                 auto m_T   =  measure(msh, cl);
-                auto h_T   =  diameter(msh, cl);
+                auto vts       =  msh.get_vertices(cl, pts);
+                auto h_T       =  diameter(msh, vts);
                 auto n     =  normal(msh, cl, fc);
 
                 Cg.at(ii)  = Cp * Cp  +  varpi * (Ct/m_T) * h_T * h_T;
@@ -1497,10 +1779,10 @@ public:
                     matrix_type c_dphi_rec    =   c_dphi_taken * gradrec_nopre.oper;
                     vector_type dphi_r_uh     =   c_dphi_rec * uh_TF;
 
-                    vector_type tau  = tsr.siglam.col(cont) - pst.alpha * tsr.gamma.col(cont);
+                    vector_type tau  = tsr.sigma.col(cont) - pst.alpha * tsr.gamma.col(cont);
                     vector_type str  = tau + pst.alpha * dphi_r_uh;
-                    auto jump = make_prod_stress_n( str , n);
-                    //auto proj_jump = make_prod_stress_n(tau + pst.alpha*dphi_r_uh , n);
+                    auto jump = make_prod( str , n);
+                    //auto proj_jump = make_prod(tau + pst.alpha*dphi_r_uh , n);
                     eta_stress  +=  qp.weight() * varpi * h_F * jump;
                     cont++;
                 }
@@ -1533,52 +1815,6 @@ public:
 #endif
 
 
-    template<typename CellQuadType, typename FaceQuadType>
-    size_t
-    gauss_points_positions(const mesh_type& msh, const cell_type& cell,
-                            const face_type& face, const size_t& quad_degree)
-    {
-        auto c_faces = faces(msh, cell);
-        size_t   j = 0;
-        #if 0
-        for(auto& fc : faces)
-        {
-            sorted_faces.at(j) = std::make_pair(fc , j);
-            j++;
-        }
-        std::sort(sorted_faces.begin(),sorted_faces.end());
-
-        //typename face_type::id_type fid(fc_id);
-        auto lower = std::lower_bound(sorted_faces.begin(), sorted_faces.end(),
-                            std::make_pair(fc_id, 0), [](myPair lhs, myPair rhs)
-                                -> bool { return lhs.first < rhs.first; });
-        if(lower == sorted_faces.end())
-            throw std::invalid_argument("This is a bug: face not found");
-
-        auto find   =  std::distance(sorted_faces.begin() , lower);
-        #endif
-        bool find = false;
-        for(auto& fc : c_faces)
-        {
-            if(fc == face)
-            {
-                find = true;
-                break;
-            }
-            j++;
-        }
-        if(!find)
-            throw std::invalid_argument("This is a bug: face not found");
-
-        auto fc_pos =  j;
-        auto cq  = CellQuadType(quad_degree);
-        auto fq  = FaceQuadType(quad_degree);
-        //WK: This should change if k different for each face
-        auto fqs = fq.integrate(msh, face).size();
-        auto cqs = cq.integrate(msh, cell).size();
-
-        return cqs + fqs * fc_pos;
-    }
     dynamic_matrix<T>
     gradient_lagrange_pol1(const mesh_type& msh, const cell_type& cl,
                            const std::vector<point_type> vts, const point_type& ep )
@@ -1601,10 +1837,31 @@ public:
         return gradient;
     }
 
+    dynamic_matrix<T>
+    gradient_lagrange_pol1(const mesh_type& msh, const cell_type& cl,
+                           const triangle<T>& t, const point_type& ep )
+    {
+        // WARNING: This only works for triangles and linear Lagrange polynomials
+        dynamic_matrix<T> gradient = dynamic_matrix<T>::Zero(2,3);
+        auto S   = measure(msh,cl);
+
+        for(size_t i = 0; i < 3; i++)
+        {
+            size_t idx1 = (i + 1)% 3;
+            size_t idx2 = (i + 2)% 3;
+            point_type p1 = t.grid_points.at(idx1);
+            point_type p2 = t.grid_points.at(idx2);
+
+            gradient(0, i) = (0.5 / S) * (p1.y() - p2.y()) ;
+            gradient(1, i) = (0.5 / S) * (p2.x() - p1.x()) ;
+        }
+        return gradient;
+    }
+
 
     template<typename TensorType>
     T
-    divergence_tau_P0(const mesh_type& msh, const cell_type& cl,
+    div_tau_P1(const mesh_type& msh, const cell_type& cl,
                       const TensorType tau, const point_type& ep, const size_t& position)
     {
         auto pts = points(msh, cl);
@@ -1622,7 +1879,7 @@ public:
         if(num_vts != 3)
             assert(num_vts == 3);
 
-        auto vts_ids =  msh.get_vertices_ids(cl);
+        auto vts_ids =  msh.get_vertices_pos(cl);
         matrix_type tau_vec =  dynamic_matrix<T>::Zero(2,3);
         size_t j = 0;
 
@@ -1638,6 +1895,469 @@ public:
 
         return div_tau;
     }
+
+    template< typename PunctualTensor>
+    T
+    div_tau_P2( const mesh_type       & msh,
+                const cell_type       & cell,
+                const PunctualTensor  & tau,
+                const size_t m_degree)
+    {
+        #if 0
+        Warning Quadrature points: we use the points directly from the quadrature
+        rule, since we dont want to transform the points to the physical element,
+        (as they are stored in the quadrature_data). The reason is that we are
+        evaluating the test functions already in the reference element.
+        #endif
+        auto m_quad_data = triangle_quadrature(2 * m_degree + 2);
+        size_t num_test_funct = 6;
+
+        matrix_type dr_phi = matrix_type::Zero(num_test_funct, m_quad_data.size());
+        matrix_type ds_phi = matrix_type::Zero(num_test_funct, m_quad_data.size());
+
+
+        // dr_phi  ds_phi
+        for(size_t i = 0; i < m_quad_data.size(); i++)
+        {
+            auto quad_point = m_quad_data.at(i).first;
+            T r = quad_point.x();
+            T s = quad_point.y();
+
+            dr_phi(0,i)  =  T(4) * r - T(1);
+            dr_phi(1,i)  =  T(0);
+            dr_phi(2,i)  =  T(4) * r + T(4) * s - T(3);
+            dr_phi(3,i)  =  s;
+            dr_phi(4,i)  = -T(4) * s;
+            dr_phi(5,i)  = -T(8) * r + T(4);
+
+            ds_phi(0,i)  =  T(0);
+            ds_phi(1,i)  =  T(4) * s - T(1);
+            ds_phi(2,i)  =  T(4) * r + T(4) * s - T(3);
+            ds_phi(3,i)  =  r;
+            ds_phi(4,i)  = -T(8) * s + T(4);
+            ds_phi(5,i)  = -T(4) * r;
+        }
+
+        auto pts_ids  = cell.point_ids();
+        auto pts = points(msh, cell);
+        auto vertices_ids = msh.get_vertices_pos(cell);
+        auto vertices = msh.get_vertices(cell, pts);
+        auto num_pts  = number_of_faces(msh, cell);
+        matrix_type tau_i = matrix_type::Zero( 2, 6);
+
+        auto cell_id = cell.get_id();
+        auto hgi = hang_nodes_vec.at(cell_id);
+        for(size_t i = 0; i < 3; i++ )
+        {
+            auto vertex_pos = vertices_ids.at(i);
+            tau_i.col(i) = tau.grid_points.col(vertex_pos);
+
+            if(!hgi.faces_has_hang_nodes.at(vertex_pos))
+                tau_i.col(3 + i) = tau.face_bars.col(i);
+            else
+                tau_i.col(3 + i) = tau.grid_points.col((i + 1)% num_pts);
+        }
+
+        // dw/dr  dx/ds   dy/dr  dy/ds
+        auto ddr = vertices.at(0) - vertices.at(2);
+        auto dds = vertices.at(1) - vertices.at(2);
+
+        // Integral
+        vector_type d_tau = vector_type::Zero(2);
+
+        for(size_t i = 0; i < num_test_funct; i++)
+        {
+            vector_type d_tau_i = vector_type::Zero(2);
+
+            for(size_t j = 0; j < m_quad_data.size(); j ++)
+            {
+                auto weight = m_quad_data.at(j).second;
+
+                vector_type d_Phi = vector_type::Zero(2);
+
+                d_Phi(0) = ( dr_phi(i,j) * dds.y() - ds_phi(i,j) * dds.y());
+                d_Phi(1) = (-dr_phi(i,j) * dds.x() + ds_phi(i,j) * ddr.x());
+
+                d_tau_i +=  weight * tau_i.col(i).cwiseProduct(d_Phi);
+            }
+            d_tau += d_tau_i;
+        }
+
+        return d_tau(0) + d_tau(1);
+    }
+
+    template< typename PunctualTensor>
+    dynamic_vector<T>
+    grad_tau_P2( const mesh_type       & msh,
+                 const cell_type       & cell,
+                 const PunctualTensor  & tau,
+                 const point_type      & ep)
+    {
+        #if 0
+        Warning Quadrature points: Since here we are going to use a point ep,
+        already transformed into the physical element, we have to use test functions
+        in the physical element. To do so, we evaluate 'r(x,y)' and 's(x,y)'.
+        Check the question about the integration in the physical element for
+        grad u
+        #endif
+        size_t num_test_funct = 6;
+
+        auto pts = points(msh, cell);
+        auto vts = msh.get_vertices(cell, pts);
+        auto num_pts = number_of_faces(msh, cell);
+        // dr_phi  ds_phi
+        //std::cout << "r : "<< r <<"  ; s : "<< s << std::endl;
+        auto x1 = vts[0].x();   auto x2 = vts[1].x();    auto x3 =  vts[2].x();
+        auto y1 = vts[0].y();   auto y2 = vts[1].y();    auto y3 =  vts[2].y();
+
+        auto ax  = (x2 - x3) / (x1 - x3) ;
+        auto cx  =  x3 /(x1 - x3);
+        auto bxy = (y1 - y3) / (x1 - x3);
+        auto mxy = (y2 - y3) - ax * (y1 - y3);
+
+        auto M =   ( T(1) / (x1 - x3))  + ( bxy * ax / mxy ) ;
+        auto N = - ax / mxy  ;
+        auto B = - cx + ( y3 / mxy) * ax - ( x3 / mxy ) * bxy * ax;;
+
+        auto P = - ( T(1) / mxy ) * bxy;
+        auto O =   ( T(1) / mxy );
+        auto C = - ( y3 / mxy) + (x3 / mxy )* bxy;
+
+        auto U = - P - M;
+        auto V = - O - N;
+        auto W =   T(1) - B - C;
+
+        matrix_type d_phi = matrix_type::Zero(2,6);
+
+        auto s = (T(1) / mxy) * ( (ep.y() - y3) - (ep.x() - x3) * bxy );
+        auto r = - ax * s + ep.x() /(x1 - x3) - cx;
+        std::cout << "ep_inside : "<< ep << std::endl;
+        std::cout << "r : "<< r <<"  ; s : "<< s << std::endl;
+        //dxdPhi
+        d_phi(0,0) = T(4) * ( M * M * ep.x() +  M * N * ep.y() +  M * B) - M;
+        d_phi(0,1) = T(4) * ( P * P * ep.x() +  P * O * ep.y() +  P * C) - P;
+        d_phi(0,2) = T(4) * ( U * U * ep.x() +  U * V * ep.y() +  U * W) - U;
+        d_phi(0,3) = T(4) * ( T(2)* M*P*ep.x() + (M*O + N*P)*ep.y() + (M*C + P*B));
+        d_phi(0,4) = T(4) * ( T(2)* U*P*ep.x() + (U*O + V*P)*ep.y() + (U*C + P*W));
+        d_phi(0,5) = T(4) * ( T(2)* M*U*ep.x() + (U*N + V*M)*ep.y() + (U*B + M*W));
+
+        d_phi(1,0) = T(4) * ( N * N * ep.y() +  M * N * ep.x() +  N * B) - N;
+        d_phi(1,1) = T(4) * ( O * O * ep.y() +  P * O * ep.x() +  O * C) - O;
+        d_phi(1,2) = T(4) * ( V * V * ep.y() +  U * V * ep.x() +  V * W) - V;
+        d_phi(1,3) = T(4) * ( T(2)* N*O*ep.y() + (M*O + N*P)*ep.x() + (N*C + O*B));
+        d_phi(1,4) = T(4) * ( T(2)* V*O*ep.y() + (U*O + V*P)*ep.x() + (V*C + O*W));
+        d_phi(1,5) = T(4) * ( T(2)* V*N*ep.y() + (U*N + V*M)*ep.x() + (V*B + N*W));
+
+        //dydPhi
+        vector_type grad = vector_type::Zero(2);
+
+        auto cell_id = cell.get_id();
+        auto hgi = hang_nodes_vec.at(cell_id);
+        auto vertices_pos = msh.get_vertices_pos(cell);
+        for(size_t i = 0; i < 3; i++)
+        {
+            auto vertex_pos = vertices_pos.at(i);
+            vector_type tau_i = tau.grid_points.col(vertex_pos);
+            grad += d_phi.col(i).cwiseProduct(tau_i);
+
+            vector_type tau_bar = vector_type::Zero(2);
+            if(!hgi.faces_has_hang_nodes.at(vertex_pos))
+                 tau_bar = tau.face_bars.col(vertex_pos);
+            else //if(hgi.faces_has_hang_nodes.at(vertex_pos))
+            {
+                auto hang_node_pos = hgi.hang_node_pos.at((vertex_pos + 1) % num_pts);
+                assert(hang_node_pos != -1);
+                tau_bar =  tau.grid_points.col(hang_node_pos);
+            }
+            grad += d_phi.col(i + 3).cwiseProduct(tau_bar);
+        }
+        return grad;
+    }
+
+
+
+    template< typename PunctualTensor>
+    T
+    div_tau_P2( const mesh_type       & msh,
+                const cell_type       & cell,
+                const PunctualTensor  & tau,
+                const point_type      & ep)
+    {
+        #if 0
+        Warning Quadrature points: Since here we are going to use a point ep,
+        already transform to the physical element, we have to use test functions
+        in the physical element. To do so, we evaluate 'r(x,y)' and 's(x,y)'.
+        Check the question about the integration in the physical element for
+        grad u
+        #endif
+        size_t num_test_funct = 6;
+
+        vector_type dr_phi = vector_type::Zero(num_test_funct);
+        vector_type ds_phi = vector_type::Zero(num_test_funct);
+        auto pts = points(msh, cell);
+        auto vts = msh.get_vertices(cell, pts);
+        auto num_pts = number_of_faces(msh, cell);
+        // dr_phi  ds_phi
+        //std::cout << " vts : "<< std::endl;
+        //for(auto v :vts)
+        //    std::cout << v << std::endl;
+        //std::cout << " ep : "<< ep << std::endl;
+        auto o = (vts[1].x() - vts[2].x()) / (vts[0].x() - vts[2].x());
+        auto b = (ep.x() - vts[2].x()) / (vts[0].x() - vts[2].x());
+
+        auto e = (vts[1].x() - vts[2].x()) / (vts[0].x() - vts[2].x()) ;
+        auto d = (ep.x() - vts[2].x()) / (vts[0].x() - vts[2].x()) ;
+        auto f = (vts[1].y() - vts[2].y()) - e * (vts[0].y() - vts[2].y());
+
+        T s =  (T(1) / f) * ( (ep.y()   - vts[2].y()) - (vts[0].y() - vts[2].y()) * d);
+        T r =  b  - s * o;
+
+        //std::cout << "r : "<< r <<"  ; s : "<< s << std::endl;
+
+        dr_phi(0)  =  T(4) * r - T(1);
+        dr_phi(1)  =  T(0);
+        dr_phi(2)  =  T(4) * r + T(4) * s - T(3);
+        dr_phi(3)  =  s;
+        dr_phi(4)  = -T(4) * s;
+        dr_phi(5)  = -T(8) * r + T(4);
+
+        ds_phi(0)  =  T(0);
+        ds_phi(1)  =  T(4) * s - T(1);
+        ds_phi(2)  =  T(4) * r + T(4) * s - T(3);
+        ds_phi(3)  =  r;
+        ds_phi(4)  = -T(8) * s + T(4);
+        ds_phi(5)  = -T(4) * r;
+
+        auto pts_ids  = cell.point_ids();
+        auto vertices_pos = msh.get_vertices_pos(cell);
+        auto cell_id  = cell.get_id();
+        auto hgi   = hang_nodes_vec.at(cell_id);
+        matrix_type tau_i = matrix_type::Zero( 2, 6);
+
+        for(size_t i = 0; i < 3; i++ )
+        {
+            auto vertex_pos = vertices_pos.at(i);
+            tau_i.col(i) = tau.grid_points.col(vertex_pos);
+
+            if(!hgi.faces_has_hang_nodes.at(vertex_pos))
+                tau_i.col(3 + i) = tau.face_bars.col(vertex_pos);
+            else
+            {
+                auto col = vertices_pos.at(i) + 1;
+                tau_i.col(3 + i) = tau.grid_points.col(col % num_pts);
+            }
+        }
+
+        // dw/dr  dx/ds   dy/dr  dy/ds
+        auto ddr = vts.at(0) - vts.at(2);
+        auto dds = vts.at(1) - vts.at(2);
+
+        // Integral
+        vector_type d_tau = vector_type::Zero(2);
+
+        for(size_t i = 0; i < num_test_funct; i++)
+        {
+            vector_type d_tau_i = vector_type::Zero(2);
+
+
+            vector_type d_Phi = vector_type::Zero(2);
+
+            d_Phi(0) = ( dr_phi(i) * dds.y() - ds_phi(i) * dds.y());
+            d_Phi(1) = (-dr_phi(i) * dds.x() + ds_phi(i) * ddr.x());
+
+            d_tau_i  +=  tau_i.col(i).cwiseProduct(d_Phi);
+        }
+
+        return 0;
+    }
+
+    template< typename PunctualTensor>
+    T
+    div_tau(const mesh_type   & msh,
+                              const cell_type       & cell,
+                              const PunctualTensor  & tensor,
+                              const point_type      & ep)
+    {
+        typedef dynamic_matrix<T>  matrix_type;
+        T div_tau = 0.;
+        auto is_find = false;
+        auto pts   = points( msh, cell);
+        auto fcs   = faces(  msh, cell);
+        auto cell_barycenter = barycenter(msh, cell);
+
+        #if 0
+        //With barycenter
+        for(size_t ifc = 0; ifc < pts.size(); ifc++)
+        {
+            auto face  = fcs.at(ifc);
+
+            /* Terminar esto
+             for(size_t  i = 0; i < 2; i++)
+            {
+                triangle<T> t1;
+                t1.points[0]  =  cell_barycenter;
+                t1.points[i + 1]  =  pts.at(ifc);
+                t1.points[i + 2 % 2]  =  barycenter(msh, face);
+            }
+            */
+
+
+            triangle<T> t1;
+            t1.points[0]  =  cell_barycenter;
+            t1.points[1]  =  pts.at(ifc);
+            t1.points[2]  =  barycenter(msh, face);
+
+            if(is_inside(t1, ep))
+            {
+                matrix_type tsr_at_t1 = matrix_type::Zero(2,3);
+                tsr_at_t1.col(0) = tensor.cell_bar;
+                tsr_at_t1.col(1) = tensor.grid_points.col(ifc);
+                tsr_at_t1.col(2) = tensor.face_bars.col(ifc);
+
+                matrix_type grad_matrix = gradient_lagrange_pol1(msh, cell, t1, ep);
+                matrix_type grad_tau =  grad_matrix.cwiseProduct(tsr_at_t1);
+
+                div_tau =  grad_tau.sum();
+
+                return div_tau;
+            }
+
+            triangle<T> t2;
+            t2.points[0]  =  cell_barycenter;
+            t2.points[1]  =  barycenter(msh, face);
+            t2.points[2]  =  pts.at((ifc + 1)% pts.size());
+
+            if(is_inside(t2, ep))
+            {
+                matrix_type tsr_at_t2 = matrix_type::Zero(2,3);
+                tsr_at_t2.col(0) = tensor.cell_bar;
+                tsr_at_t2.col(1) = tensor.face_bars.col(ifc);
+                tsr_at_t2.col(2) = tensor.grid_points.col((ifc + 1)% pts.size());
+
+                auto grad_matrix = gradient_lagrange_pol1(msh, cell, t2, ep);
+                auto grad_tau =  grad_matrix.cwiseProduct(tsr_at_t2);
+                div_tau  =  grad_tau.sum();
+
+                return div_tau;
+            }
+
+        }
+                throw std::logic_error("Point not found in this cell.");
+        #endif
+
+        //Lineal
+        //#if 0
+        auto vts      =  msh.get_vertices(cell, pts);
+        auto vts_ids  =  msh.get_vertices_pos(cell);
+        auto num_vts = vts.size();
+        if(num_vts != 3)
+            assert(num_vts == 3);
+
+        triangle<T> t3;
+        t3.points[0]  =  vts.at(0);
+        t3.points[1]  =  vts.at(1);
+        t3.points[2]  =  vts.at(2);
+
+        if(is_inside(t3, ep))
+        {
+            matrix_type tsr_at_t3 = matrix_type::Zero(2,3);
+            tsr_at_t3.col(0) = tensor.grid_points.col(vts_ids.at(0));
+            tsr_at_t3.col(1) = tensor.grid_points.col(vts_ids.at(1));
+            tsr_at_t3.col(2) = tensor.grid_points.col(vts_ids.at(2));
+
+            auto grad_matrix = gradient_lagrange_pol1(msh, cell, t3, ep);
+            auto grad_tau =  grad_matrix.cwiseProduct(tsr_at_t3);
+            div_tau  =  grad_tau.sum();
+
+            return div_tau;
+        }
+
+        std::cout << "point :" << ep << std::endl;
+        std::cout << "vts :" << std::endl;
+        for (auto& v: vts)
+        {
+            std::cout << "* p : "<< v << std::endl;
+        }
+
+        std::cout << "pts :" << std::endl;
+        for (auto& v: pts)
+        {
+            std::cout << "* p : "<< v << std::endl;
+        }
+
+        throw std::logic_error("Point not found in this cell.");
+        //#endif
+
+        #if 0
+        // 4 triangles
+        for(size_t ifc = 0; ifc < pts.size(); ifc++)
+        {
+            auto face  = fcs.at(ifc);
+
+            /* Terminar esto
+             for(size_t  i = 0; i < 2; i++)
+            {
+                triangle<T> t1;
+                t1.points[0]  =  cell_barycenter;
+                t1.points[i + 1]  =  pts.at(ifc);
+                t1.points[i + 2 % 2]  =  barycenter(msh, face);
+            }
+            */
+
+
+            triangle<T> t1;
+            std::cout << "face left : " << (ifc + pts.size() -1) % pts.size() << std::endl;
+            std::cout << "face right: " << ifc << std::endl;
+            auto ifc_left   = (ifc + pts.size() -1) % pts.size();
+            auto ifc_right  = ifc;
+            auto face_left  = fcs.at( ifc_left);
+            auto face_right = fcs.at( ifc);
+
+            t1.points[0]  =  barycenter(msh, face_left);
+            t1.points[1]  =  pts.at(ifc);
+            t1.points[2]  =  barycenter(msh,face_right);
+
+            if(is_inside(t1, ep))
+            {
+                matrix_type tsr_at_t1 = matrix_type::Zero(2,3);
+                tsr_at_t1.col(0) = tensor.face_bars.col(ifc_left);
+                tsr_at_t1.col(1) = tensor.grid_points.col(ifc);
+                tsr_at_t1.col(2) = tensor.face_bars.col(ifc);
+
+                matrix_type grad_matrix = gradient_lagrange_pol1(msh, cell, t1, ep);
+                matrix_type grad_tau =  grad_matrix.cwiseProduct(tsr_at_t1);
+
+                div_tau =  grad_tau.sum();
+                is_find = true;
+                break;
+            }
+        }
+
+        triangle<T> t2;
+        t2.points[0]  =  cell_barycenter;
+        t2.points[1]  =  barycenter(msh, face);
+        t2.points[2]  =  pts.at((ifc + 1)% pts.size());
+
+        if(is_inside(t2, ep))
+        {
+            matrix_type tsr_at_t2 = matrix_type::Zero(2,3);
+            tsr_at_t2.col(0) = tensor.cell_bar;
+            tsr_at_t2.col(1) = tensor.face_bars.col(ifc);
+            tsr_at_t2.col(2) = tensor.grid_points.col((ifc + 1)% pts.size());
+
+            auto grad_matrix = gradient_lagrange_pol1(msh, cell, t2, ep);
+            auto grad_tau =  grad_matrix.cwiseProduct(tsr_at_t2);
+            div_tau  =  grad_tau.sum();
+
+            is_find = true;
+            break;
+        }
+
+        throw std::logic_error("Point not found in this cell.");
+        #endif
+
+    }
+
 
     void
     error_to_matlab(const mesh_type& msh,
@@ -1716,9 +2436,9 @@ public:
                 for(auto & p : pts)
                     mefs <<eta.at(cont).second <<" "<< p.x() <<" " << p.y()<<std::endl;
                 mefs << " ];"<<std::endl;
-                mefs << "fill(coords(:,2), coords(:,3), color_mat("<<i + 1<<",:)) "<<std::endl;
+                mefs << "fill(coords(:,2), coords(:,3), color_mat("<<i + 1<<",:)); "<<std::endl;
                 mefs<< "strName = strtrim(cellstr(num2str("<< eta.at(cont).second<<",'(%d)')));"<<std::endl;
-                mefs<< "text("<<b.x()<< ","<< b.y() <<",strName,'VerticalAlignment','bottom');"<<std::endl;
+                mefs<< "\%text("<<b.x()<< ","<< b.y() <<",strName,'VerticalAlignment','bottom');"<<std::endl;
 
                 ++cont;
 
@@ -1778,7 +2498,7 @@ public:
         {
             auto e = eta.at(i);
             T new_value = e.first;
-            if(std::abs(value - new_value) < 1.e-15)
+            if(std::abs((value - new_value)/value)  < 1.e-5)
             {
                 cont++;
             }
@@ -1809,19 +2529,28 @@ public:
                 for(auto & p : pts)
                     mefs <<eta.at(cont).second <<" "<< p.x() <<" " << p.y()<<std::endl;
                 mefs << " ];"<<std::endl;
-                mefs << "fill(coords(:,2), coords(:,3), color_mat("<<i + 1<<",:)) "<<std::endl;
+                mefs << "hc = fill(coords(:,2), coords(:,3), color_mat("<<i + 1<<",:)) ;"<<std::endl;
+                mefs << "set(hc,'EdgeColor','none');"<<std::endl;
                 mefs<< "strName = strtrim(cellstr(num2str("<< eta.at(cont).second<<",'(%d)')));"<<std::endl;
-                mefs<< "text("<<b.x()<< ","<< b.y() <<",strName,'VerticalAlignment','bottom');"<<std::endl;
-                mefs<<  eta.at(cont).first <<std::endl;
+                mefs<< "\%text("<<b.x()<< ","<< b.y() <<",strName,'VerticalAlignment','bottom');"<<std::endl;
+
+                mefs<< "strTau = strtrim(cellstr(num2str("<< eta.at(cont).first<<",'(%d)')));"<<std::endl;
+                mefs<< "text("<<b.x()<< ","<< b.y() <<",strTau,'VerticalAlignment','bottom');"<<std::endl;
+
+                mefs<<  eta.at(cont).first<<";" <<std::endl;
                 ++cont;
             }
         }
         auto vmax = eta.at(0).first;
         auto vmin = eta.at(eta.size()-1).first;
         auto h = (vmax - vmin) / 10.;
-        mefs<< "h = colorbar;"<<std::endl;
-        mefs<< "caxis(["<< vmin <<" "<< vmax <<"])"<<std::endl;
-        mefs<< "set(h,'YTick',["<<vmin<<":"<< h <<":"<< vmax <<"])"<<std::endl;
+
+        mefs<< "set(gca,'XTick',get(gca,'YTick'));"<<std::endl;
+        mefs<< "colormap(fliplr(color_mat));"<<std::endl;;
+        mefs<< "hcb = colorbar;"<<std::endl;;
+        mefs<< "caxis([3.4577e-14 8.73979e-05]);"<<std::endl;;
+        mefs<< "caxis(["<< vmin <<" "<< vmax <<"]);"<<std::endl;
+        mefs<< "set(hcb,'YTick',["<<vmin<<":"<< h <<":"<< vmax <<"]);"<<std::endl;
 
         mefs.close();
         assert(cont == msh.cells_size());
@@ -1829,14 +2558,70 @@ public:
     }
 
 //#if 0
+
+
+
+    template<typename CellBasisType, typename CellQuadType,
+             typename FaceBasisType, typename FaceQuadType,
+             typename Solution>
+    dynamic_vector<T>
+    proj_residue(const mesh_type& msh,
+                 const cell_type& cell,
+                 const dynamic_vector<T>& c_ruh,
+                 const punctual_tensor<mesh_type>& c_tau,
+                 const Solution& solution,
+                 const size_t m_degree)
+    {
+        std::cout << "INSIDE PROJ_RESIDUE" << std::endl;
+
+        typedef CellBasisType           cell_basis_type;
+        typedef FaceBasisType           face_basis_type;
+        typedef CellQuadType            cell_quadrature_type;
+        typedef FaceQuadType            face_quadrature_type;
+        typedef typename mesh_type::point_type               point_type;
+        typedef T  scalar_type;
+        typedef dynamic_vector<scalar_type>     vector_type;
+        typedef dynamic_matrix<scalar_type>     matrix_type;
+
+        cell_basis_type  cb(m_degree + 1);
+        auto col_range = cb.range(1,m_degree+1);
+        projector_nopre<mesh_type,
+                            cell_basis_type,
+                            cell_quadrature_type,
+                            face_basis_type,
+                            face_quadrature_type> projk(m_degree);
+
+        auto cell_id  = cell.get_id();
+        auto residue =  [&](const point_type& p, const size_t number) -> scalar_type
+        {
+            vector_type ddphi     =  cb.eval_laplacians(msh, cell, p);
+            vector_type ddphi_zm  =  take(ddphi, col_range);
+            T lap_ruh  = ddphi_zm.dot(c_ruh);
+
+            vector_type  grad_tau = grad_tau_P2( msh, cell, c_tau, p);
+            auto div_tau = grad_tau.sum();
+
+            auto f = solution.f(p);
+
+            return f + div_tau + lap_ruh;
+        };
+
+        vector_type uT = projk.compute_cell(msh, cell, residue);
+
+        return uT;
+    }
+
+
     template<typename CellBasisType, typename FaceBasisType, typename Solution>
-    bool
-    marker_ae( const mesh_type& msh,
-            const std::vector<tensors<T>>& tsr_vec,
+    auto
+    error_estimate(T set_error,
+            const mesh_type& msh,
+            const std::vector<tensors<mesh_type>>& tsr_vec,
             const std::vector<dynamic_vector<T>>&  Uh_Th,
             const size_t& m_degree,
             const Solution& solution,
             const std::vector<matrix_type>& grad_global)
+
     {
         typedef CellBasisType                   cell_basis_type;
         typedef FaceBasisType                   face_basis_type;
@@ -1848,39 +2633,14 @@ public:
         typedef Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>  tensor_matrix;
 
         //WK: This is ok  whenever k is equal in all cells and then the number of pts gauss are the same.
-        //otherwise this should be inside the for(auto& cl_id : owner_cells)
-        auto quad_degree = tsr_vec[0].quad_degree;
+        //otherwise this should be inside for(auto& cl_id : owner_cells)
+        auto quad_degree = tsr_vec[0].sigma.m_quad_degree;
 
         cell_basis_type                         cell_basis(m_degree + 1);
         face_basis_type                         face_basis(m_degree);
         face_quadrature_type                    face_quadrature(quad_degree);
         cell_quadrature_type                    cell_quadrature(quad_degree);
 
-        std::cout << "INSIDE_AE_MARKER" << std::endl;
-
-        std::ofstream       ofs(mp.directory + "/estimator.txt", std::ios::app);
-        if (!ofs.is_open())
-            std::cout << "Error opening ofs"<<std::endl;
-
-        bool do_refinement(false);
-
-        cells_marks = std::vector<size_t>(msh.cells_size());
-
-        for(size_t i = 0; i < tsr_vec.size();i++)
-        {
-            auto mat = tsr_vec.at(i).xi_norm;
-
-            for(size_t m = 0; m < mat.size(); m++)
-            {
-                if(std::isnan(mat(0,m)))
-                    throw std::logic_error("The norm of the constrain is NaN");
-            }
-        }
-            //Marking with estimators
-
-        //WK: this should be vector of vectors if u es a vectorial function,
-        //since each tensor is a matrix. Then the jump = [tau + alpha G(u)].n
-        // will be a vector and not a scalar.
         std::vector<T> eta_stress(msh.cells_size());
         std::vector<T> eta_residual(msh.cells_size());
 
@@ -1897,52 +2657,93 @@ public:
             auto c_faces   =  faces(msh, cell);
             auto c_tsr     =  tsr_vec.at(cell_id);
             auto meas_T    =  measure( msh, cell);
-            auto h_T       =  diameter(msh, cell);
+            auto pts       =  points(msh,cell);
+            auto vts       =  msh.get_vertices(cell, pts);
+            auto h_T       =  diameter(msh, vts);
             auto num_faces =  c_faces.size();
 
             vector_type c_uh_TF   =  Uh_Th.at(cell_id);
             matrix_type rec_oper  =  grad_global.at(cell_id);
             vector_type c_ruh     =  rec_oper * c_uh_TF;
 
+            auto c_gamma   =  tsr_vec.at(cell_id).gamma;
+            auto c_sigma   =  tsr_vec.at(cell_id).sigma;
+
             size_t cont_fc  = 0;
             size_t fqs_size = 0;
+
             //term 4
+            auto h_F     =  h_T;
+
             for( auto& face : c_faces)
             {
                 T eta_stress_loc = 0.;
-                auto h_F      =  measure(msh, face);
+
+                //********** KWarning:  Review this for hanging nodes *********!!!!
+                //auto h_F      =  measure(msh, face);
+                //********** KWarning:  Review this for hanging nodes *********!!!!
+
                 auto varpi    =  (msh.is_boundary(face))? 0.: 0.5 ;
 
-                size_t neighbor_id;
+                size_t ngh_id;
+
                 if( !msh.is_boundary(face) )
-                    neighbor_id = face_owner_cells_ids(msh, face, cell);
+                    ngh_id = msh.neighbor_id(cell, face);
                 else
-                    neighbor_id = cell_id;
+                    ngh_id = cell_id;
 
-                auto neighbor  = *std::next(msh.cells_begin(),  neighbor_id);
+                auto neighbor  = *std::next(msh.cells_begin(),  ngh_id);
+
                 auto c_normal  =  normal(msh, cell, face);
-                auto n_normal  =  normal(msh, neighbor, face);
-                auto n_tsr     =  tsr_vec.at(neighbor_id);
-                auto cgp_id    =  gauss_points_positions<cell_quadrature_type
-                                                         ,face_quadrature_type>
-                                                    (msh,cell,face, quad_degree);
-                auto ngp_id    =  gauss_points_positions<cell_quadrature_type
-                                                         ,face_quadrature_type>
-                                                (msh,neighbor,face, quad_degree);
-                matrix_type n_rec_oper =  grad_global.at(neighbor_id);
-                vector_type nc_uh_TF   =  Uh_Th.at(neighbor_id);
-                vector_type n_ruh      =  n_rec_oper * nc_uh_TF;
 
-                //WK: This should change if k different for each face
+                auto c_nFT  =  normal_factor(msh, cell, face);
+                auto n_nFT  =  normal_factor(msh, neighbor, face);
+
+                if(c_nFT == n_nFT && !msh.is_boundary(face))
+                    throw std::logic_error("Cells sharing face have the same normal. Review normal factor");
+
+
+                //std::cout << "FACE : "<< fcs_ids.at(borrar++) << std::endl;
+                //std::cout << " * cell ("<< cell_id<<") : "<< c_fqs_size << std::endl;
+                //std::cout << " * neigh("<< neighbor_id<<") : "<< n_fqs_size << std::endl;
+
+
                 auto fqs = face_quadrature.integrate(msh, face);
                 fqs_size += fqs.size();
 
+                auto n_num_faces = number_of_faces(msh, neighbor);
+
+                matrix_type n_rec_oper =  grad_global.at(ngh_id);
+                vector_type nc_uh_TF   =  Uh_Th.at(ngh_id);
+                vector_type n_ruh      =  n_rec_oper * nc_uh_TF;
+
+                auto n_gamma   =  tsr_vec.at(ngh_id).gamma;
+                auto n_sigma   =  tsr_vec.at(ngh_id).sigma;
+
+                auto c_fqs_size = c_sigma.face_qps_cols();
+                auto n_fqs_size = n_sigma.face_qps_cols();
+
+                assert ((c_fqs_size/num_faces) == fqs.size());
+                assert ((n_fqs_size/n_num_faces) ==  fqs.size());
+
+                matrix_type c_tau  = c_sigma.face_quad_pts - pst.alpha * c_gamma.face_quad_pts;
+                matrix_type n_tau  = n_sigma.face_quad_pts - pst.alpha * n_gamma.face_quad_pts;
+
+                auto c_face_pos  = face_position(msh, cell, face);
+                auto n_face_pos  = face_position(msh, neighbor, face);
+
+                auto cq_range = c_sigma.qsr.face_range(c_face_pos);
+                auto nq_range = n_sigma.qsr.face_range(n_face_pos);
+
+                auto cqp_pos = cq_range.min();
+                auto nqp_pos = nq_range.min();
+
+                //WK: This should change if k different for each face
+
                 for (auto& qp : fqs)
                 {
-                    auto c_phi   = cell_basis.eval_functions(msh, cell, qp.point());
                     auto c_dphi  = cell_basis.eval_gradients(msh, cell, qp.point());
                     //Esto debe ser igual que lo de arriba lo que va a cambiar el gradiente es u_TF en cada elemento
-                    auto nc_phi  = cell_basis.eval_functions(msh, neighbor, qp.point());
                     auto nc_dphi = cell_basis.eval_gradients(msh, neighbor, qp.point());
 
                     matrix_type c_dphi_matrix  =   make_gradient_matrix(c_dphi);
@@ -1953,20 +2754,15 @@ public:
                     matrix_type nc_dphi_taken  =   take(nc_dphi_matrix, row_range, col_range);
                     vector_type nc_dphi_ruh    =   nc_dphi_taken * n_ruh;
 
-                    vector_type c_tau  = c_tsr.siglam.col(cgp_id) - pst.alpha * c_tsr.gamma.col(cgp_id);
-                    vector_type n_tau  = n_tsr.siglam.col(ngp_id) - pst.alpha * n_tsr.gamma.col(ngp_id);
-
                     //estimator only with plasticity
-                    vector_type c_str  = c_tau + pst.alpha *  c_dphi_ruh;
-                    vector_type n_str  = n_tau + pst.alpha * nc_dphi_ruh;
+                    vector_type c_str  = c_tau.col(cqp_pos) + pst.alpha *  c_dphi_ruh;
+                    vector_type n_str  = n_tau.col(nqp_pos) + pst.alpha * nc_dphi_ruh;
 
-
-                    vector_type jump = c_str - n_str;
-                    auto jp_value    = varpi * make_prod_stress_n( jump , c_normal);
-                    //auto proj_jump = make_prod_stress_n(tau + pst.alpha*dphi_r_uh , n);
+                    vector_type jump = (c_str * c_nFT)  + (n_str * n_nFT);
+                    auto jp_value    = varpi * make_prod( jump , c_normal);
                     eta_stress_loc  += qp.weight() * jp_value * jp_value;
-                    cgp_id++;
-                    ngp_id++;
+                    cqp_pos++;
+                    nqp_pos++;
                 }
 
                 auto eT_stress = h_T * std::sqrt( (Ct/meas_T) * h_F * eta_stress_loc);
@@ -1974,28 +2770,62 @@ public:
             }
 
             T eta_res = 0.;
-
+            T eta_res1(0), eta_res2(0);
             //term 1
             auto cqs = cell_quadrature.integrate(msh, cell);
-            auto pos = cqs.size() + fqs_size;
-
-            //std::cout << "cell : "<< cell_id << std::endl;
-            for (auto& qp : cqs)
+            auto c_tau =  c_sigma - pst.alpha * c_gamma;
+            //auto div_tau  = div_tau_P2( msh, cell, c_tau, m_degree);
+            //std::cout << "cell : " << cell_id << std::endl;
+            for(auto& qp : cqs)
             {
-                    vector_type ddphi     =  cell_basis.eval_laplacians(msh, cell, qp.point());
-                    vector_type ddphi_zm  =  take(ddphi, col_range);
-                    //#if 0
-                    T   lap_ruh =  ddphi_zm.dot(c_ruh);
-                    matrix_type c_tau    =  c_tsr.siglam - pst.alpha * c_tsr.gamma;
+                vector_type ddphi     =  cell_basis.eval_laplacians(msh, cell, qp.point());
+                vector_type ddphi_zm  =  take(ddphi, col_range);
 
-                    auto div_tau  =  divergence_tau_P0(msh, cell, c_tau, qp.point(), pos);
-                    auto f   = solution.f(qp.point());
-                    eta_res += qp.weight() * iexp_pow(f + div_tau +  pst.alpha * lap_ruh, 2.);
-                    //#endif 0
+                T    lap_ruh  =  ddphi_zm.dot(c_ruh);
 
+                //matrix_type c_tau_mat = c_tau.join_all();
+                //auto div_tau_1  =  div_tau_P1(msh, cell, c_tau_mat, qp.point(), pos);
+
+                //std::cout << "*  div_tau_old : "<< div_tau_1 << std::endl;
+                //auto div_tau  = div_tau(msh, cell, c_tau, qp.point());
+
+                //std::cout << "*  div_tau_new : "<< div_tau << std::endl;
+                vector_type grad_tau = grad_tau_P2( msh, cell, c_tau, qp.point());
+                auto div_tau = grad_tau.sum();
+                //auto div_tau_prueba =  div_tau_P2(msh, cell, c_tau, qp.point());
+
+                auto f   = solution.f(qp.point());
+                // cuidado aqui porque div_tau calculado con div_tau_P2 entrega la Integral
+                //entonces hay qe quitarlo de la integral en el loop de cqs. y se sumaria a eta_res
+                //por fuera del loop
+
+
+                vector_type proj_res_dof = proj_residue<cell_basis_type, cell_quadrature_type,
+                                        face_basis_type, face_quadrature_type>
+                                        (msh, cell, c_ruh, c_tau, solution, 0);
+                auto phi = cell_basis.eval_functions(msh, cell, qp.point());
+
+                T proj_res_fun = proj_res_dof(0) * phi.at(0);
+
+                std::cout << "proj_res_fun ("<< cell_id <<"): "<< proj_res_fun << std::endl;
+
+                eta_res += qp.weight() * (f + div_tau +  pst.alpha * lap_ruh - proj_res_fun)
+                            * (f + div_tau +  pst.alpha * lap_ruh - proj_res_fun);
+
+                auto e1 = qp.weight() * (f + div_tau +  pst.alpha * lap_ruh)// - proj_res_fun)
+                            * (f + div_tau +  pst.alpha * lap_ruh);// - proj_res_fun);
+
+                auto e2 = qp.weight() * (f + div_tau +  pst.alpha * lap_ruh - proj_res_fun)
+                            * (f + div_tau +  pst.alpha * lap_ruh - proj_res_fun);
+
+                eta_res1 += e1;
+                eta_res2 += e2;
+
+                std::cout << "e1 = "<< e1 <<"    ; e2 = "<< e2 << std::endl;
+                std::cout << "eta_res1 : "<< eta_res1 << "      ; eta_res2 : "<< eta_res2 <<std::endl;
                     #if 0
                     T    lap_ruh  =  ddphi_zm.dot(c_ruh);
-                    matrix_type c_tau    =  c_tsr.siglam - pst.alpha * c_tsr.gamma;;
+                    matrix_type c_tau    =  c_tsr.sigma - pst.alpha * c_tsr.gamma;;
                     auto f   = solution.f(qp.point());
                     auto div_tau  =  divergence_tau_P0(msh, cell, c_tau, qp.point(), pos);
                     //eta_res += qp.weight() * iexp_pow( f, 2.);
@@ -2016,7 +2846,7 @@ public:
 
                     std::cout << " * div_tau : "<< div_tau << std::endl;
                     std::cout << " * isnan ? : "<< std::isnan(div_tau) << std::endl;
-                    #endif 0
+                    #endif
 
             }
 
@@ -2038,45 +2868,10 @@ public:
 
         std::cout << "eglobal_res : "<<eglobal_res<<"    ; eglobal_stress : "<< eglobal_stress<< std::endl;
 
-        T set_error(0.);
 
-        disk::projector_nopre<mesh_type,
-                            cell_basis_type,
-                            cell_quadrature_type,
-                            face_basis_type,
-                            face_quadrature_type> projk(m_degree);
-
-        std::vector<std::pair<T,size_t>> eta(msh.cells_size());
-        std::vector<std::pair<T,size_t>> etas(msh.cells_size());
-        std::vector<std::pair<T,size_t>> etar(msh.cells_size());
-        // (n_res + n_stress)_T^2
-        for(size_t cl_id = 0; cl_id < msh.cells_size(); cl_id++)
-        {
-            //Estimator
-            auto eT  = iexp_pow(eta_residual.at(cl_id) + eta_stress.at(cl_id), 2.);
-            auto eT1 = iexp_pow(eta_stress.at(cl_id), 2.);
-            auto eT2 = iexp_pow(eta_residual.at(cl_id), 2.);
-            set_error += eT;
-
-            eta.at(cl_id).first  = eT;
-            eta.at(cl_id).second = cl_id;
-
-            etas.at(cl_id).first  = eT1;
-            etas.at(cl_id).second = cl_id;
-
-            etar.at(cl_id).first  = eT2;
-            etar.at(cl_id).second = cl_id;
-            //std::cout << cl_id<<"  "<< eta.at(cl_id).first <<"  "<< eta.at(cl_id).second << "  "<< eT2 <<std::endl;
-        }
-        //ofs << set_error << std::endl;
-
-        auto comp = [](const std::pair<T, size_t>& a, const std::pair<T, size_t>& b) -> bool {
-        	return a.first > b.first;
-        };
-
-        std::sort(eta.begin(), eta.end(), comp);
-        std::sort(etas.begin(), etas.end(), comp);
-        std::sort(etar.begin(), etar.end(), comp);
+        //WK: this should be vector of vectors if u es a vectorial function,
+        //since each tensor is a matrix. Then the jump = [tau + alpha G(u)].n
+        // will be a vector and not a scalar.
         #if 0
         for(auto& e: eta)
         {
@@ -2085,7 +2880,59 @@ public:
         }
         #endif
 
+        set_error = T(0);
+        std::vector<std::pair<T,size_t>> eta(msh.cells_size());
+        std::vector<std::pair<T,size_t>> etat(msh.cells_size());
+        std::vector<std::pair<T,size_t>> etas(msh.cells_size());
+        std::vector<std::pair<T,size_t>> etar(msh.cells_size());
+
+        // n_Total = (n_residual + n_jump)_T^2
+        for(size_t cl_id = 0; cl_id < msh.cells_size(); cl_id++)
+        {
+            //Estimator
+            auto eT  = iexp_pow(eta_residual.at(cl_id) + eta_stress.at(cl_id), 2.);
+            auto eT1 = eta_stress.at(cl_id);
+            auto eT2 = eta_residual.at(cl_id);
+            set_error += eT;
+
+            eta.at(cl_id).first  = eT;
+            eta.at(cl_id).second = cl_id;
+
+            etat.at(cl_id).first  = std::sqrt(eT);
+            etat.at(cl_id).second = cl_id;
+
+            etas.at(cl_id).first  = eT1;
+            etas.at(cl_id).second = cl_id;
+
+            etar.at(cl_id).first  = eT2;
+            etar.at(cl_id).second = cl_id;
+        }
+
+        auto comp = [](const std::pair<T, size_t>& a, const std::pair<T, size_t>& b) -> bool {
+            return a.first > b.first;
+        };
+
+        std::sort(eta.begin(),  eta.end(), comp);
+        std::sort(etat.begin(), etat.end(), comp);
+        std::sort(etas.begin(), etas.end(), comp);
+        std::sort(etar.begin(), etar.end(), comp);
+
+        error_to_matlab(msh, eta,  "tot2" + info);
+        error_to_matlab(msh, etat,  "tot" + info);
+        error_to_matlab(msh, etas,  "str" + info);
+        error_to_matlab(msh, etar,  "res" + info);
+
+        std::ofstream       ofs(mp.directory + "/estimator.txt", std::ios::app);
+        if (!ofs.is_open())
+            std::cout << "Error opening ofs"<<std::endl;
         ofs<< "No. Adaptation" << imsh <<std::endl;
+
+        disk::projector_nopre<mesh_type,
+                            cell_basis_type,
+                            cell_quadrature_type,
+                            face_basis_type,
+                            face_quadrature_type> projk(m_degree);
+
         for(auto& e : eta)
         {
             auto cell_id   = e.second;
@@ -2102,14 +2949,22 @@ public:
             auto err_dof = std::sqrt(diff_dof.dot(projk.cell_mm * diff_dof));
 
             //L2_error gradient
-            T error_dfun(0.);
+            T error_dfun(0);
             typedef typename disk::solution<T,2>::gradient_vector   gradient_vector;
             auto cqs = cell_quadrature.integrate(msh, cell);
 
             for (auto& qp : cqs)
             {
-                gradient_vector dphi_fun  =  solution.df(qp.point(),0);
-                //Este cero es solo a causa del test con el prolema difusivo dividido en dos partes. Para tuyau y los otros puede ser cualquier nuemero
+                size_t number = 0;
+                #if 0
+                //Este cero es solo a causa del test con el prolema difusivo dividido
+                // en dos partes. Para tuyau y los otros puede ser cualquier numero.
+                // Tener en cuneta esto si se va a llamar el estimador con el proble diff
+
+                if(mp.diff)
+                    number = set_cell_number(msh, cell);
+                #endif
+                gradient_vector dphi_fun  =  solution.df(qp.point(),number);
 
                 auto c_dphi  = cell_basis.eval_gradients(msh, cell, qp.point());
                 matrix_type  c_dphi_matrix =  make_gradient_matrix(c_dphi);
@@ -2124,26 +2979,88 @@ public:
             ofs << cell_id <<"  "<< err_dof <<"  " <<error_dfun<<"  ";
             ofs << eta_residual.at(cell_id) <<"  ";
             ofs << eta_stress.at(cell_id)   <<"  "<< std::sqrt(e.first) << std::endl;
-
-            #if 0
-            std::cout << cell_id <<"  "<< err_dof <<"  " <<error_dfun<<"  ";
-            std::cout << eta_residual.at(cell_id) <<"  ";
-            std::cout << eta_stress.at(cell_id) <<"  "<< std::sqrt(e.first) << std::endl;
-            #endif 0
         }
         ofs <<std::endl;
         ofs.close();
 
-        T new_set_error(0.);
-        std::cout << "total error : "<< set_error << std::endl;
-        std::cout << "percent     : "<< mp.percent << std::endl;
+        return eta;
+    }
 
+    template<typename CellBasisType, typename FaceBasisType, typename Solution>
+    bool
+    marker_ae( const mesh_type& msh,
+            const std::vector<tensors<mesh_type>>& tsr_vec,
+            const std::vector<dynamic_vector<T>>&  Uh_Th,
+            const size_t& m_degree,
+            const Solution& solution,
+            const std::vector<matrix_type>& grad_global)
+    {
+
+        std::cout << "INSIDE_AE_MARKER" << std::endl;
+
+        check_for_NaN(tsr_vec);
+
+        auto set_error = T(0);
+        auto eta = error_estimate<CellBasisType, FaceBasisType, Solution>
+                (set_error, msh, tsr_vec, Uh_Th, m_degree, solution, grad_global);
+
+        struct group
+        {
+            typedef typename std::vector<std::pair<T,size_t>>::iterator  itor_type;
+
+            T value;
+            itor_type itor_begin;
+            itor_type itor_end;
+
+            group(){};
+
+            group(const T val, const itor_type& begin, const itor_type& end)
+            {
+                value = val;
+                itor_begin = begin;
+                itor_end   = end;
+            }
+        };
+
+        auto new_set_error = T(0);
+        auto add_group     = false;
+        auto do_refinement = false;
+
+        group initial_group(eta[0].first, eta.begin(), eta.begin());
+        std::vector<group> eta_group  {initial_group};
+
+        for(auto itor = eta.begin(); itor <= eta.end(); itor++)
+        {
+            auto e = *itor;
+            add_group = true;
+
+            for(auto& eg : eta_group)
+            {
+                if((std::abs(e.first - eg.value)/eg.value <= 1.e-4))
+                {
+                    add_group  = false;
+                    eg.itor_end  = itor;
+                    break;
+                }
+            }
+            if(add_group)
+            {
+                group new_group(e.first ,itor, itor);
+                eta_group.push_back(new_group);
+            }
+        }
+
+        std::cout << "eta_group size: "<< eta_group.size() << std::endl;
+
+        #if 0
+        // Marking by cells
         for(auto& e : eta)
         {
             auto cell_id   = e.second;
             new_set_error += e.first;
 
             cells_marks.at(cell_id) = 3;
+            std::cout << "5.*** cell_id : "<< cell_id << std::endl;
             ++levels.at(cell_id);
             do_refinement  = true;
 
@@ -2153,6 +3070,27 @@ public:
             if( new_set_error >= mp.percent * set_error )
                 break;
         }
+        #endif
+
+        cells_marks = std::vector<size_t>(msh.cells_size());
+
+        // Marking by groups
+        for(auto eg : eta_group)
+        {
+            for(auto it = eg.itor_begin; it <= eg.itor_end; it++)
+            {
+                auto e = *it;
+                auto cell_id   = e.second;
+                new_set_error += e.first;
+
+                cells_marks.at(cell_id) = 3;
+                ++levels.at(cell_id);
+                do_refinement  = true;
+            }
+            if( new_set_error >= mp.percent * set_error )
+                break;
+        }
+
         dump_to_matlab( msh, mp.directory + "/mesh_pr_" +  info + ".m", cells_marks);
 
         if(mp.marker_name == 6 )
@@ -2160,8 +3098,7 @@ public:
             for(size_t i = 0; i < tsr_vec.size();i++)
             {
 
-                dynamic_matrix<T> sigmas = tsr_vec.at(i).siglam;
-
+                dynamic_matrix<T> sigmas = tsr_vec.at(i).sigma.join_all();
                 dynamic_vector<T> mat(sigmas.cols());
 
                 for(size_t m = 0; m < sigmas.cols(); m++)
@@ -2169,7 +3106,6 @@ public:
                     dynamic_vector<T> s = sigmas.col(m);
                     mat(m) = s.norm();
                 }
-
 
                 for(size_t m = 0; m < mat.size(); m++)
                 {
@@ -2194,11 +3130,6 @@ public:
             dump_to_matlab( msh, mp.directory + "/mesh_agp_" +  info + ".m", cells_marks);
         }
 
-        error_to_matlab(msh, eta ,  "tot" + info);
-        error_to_matlab(msh, etas,  "str" + info);
-        error_to_matlab(msh, etar,  "res" + info);
-
-
         for(auto& cl : msh)
             check_levels(msh, cl);
 
@@ -2210,7 +3141,7 @@ public:
     template<typename CellBasisType, typename FaceBasisType, typename Solution>
     bool
     marker( const mesh_type& msh,
-            const std::vector<tensors<T>>& tsr_vec,
+            const std::vector<tensors<mesh_type>>& tsr_vec,
             const plasticity_data<T>& pst,
             const std::vector<dynamic_vector<T>>&  Uh_Th,
             const size_t& m_degree,
@@ -2249,7 +3180,6 @@ public:
         }
 
     }
-
 //#endif
 #if 0
 
@@ -2315,7 +3245,8 @@ public:
             auto cell_id   =  cell.get_id();
             auto c_faces   =  faces(msh, cell);
             auto meas_T    =  measure( msh, cell);
-            auto h_T       =  diameter(msh, cell);
+            auto vts       =  msh.get_vertices(cell, pts);
+            auto h_T       =  diameter(msh, vts);
             auto num_faces =  c_faces.size();
 
             auto pts = points(msh,cell);
@@ -2343,13 +3274,13 @@ public:
                 auto h_F      =  measure(msh, face);
                 auto varpi    =  (msh.is_boundary(face))? 0.: 0.5 ;
 
-                size_t neighbor_id;
+                size_t ngh_id;
                 if( !msh.is_boundary(face) )
-                    neighbor_id = face_owner_cells_ids(msh, face, cell);
+                    ngh_id = msh.neighbor_id(cell, face);
                 else
-                    neighbor_id = cell_id;
+                    ngh_id = cell_id;
 
-                auto neighbor  = *std::next(msh.cells_begin(),  neighbor_id);
+                auto neighbor  = *std::next(msh.cells_begin(),  ngh_id);
                 auto c_normal  =  normal(msh, cell, face);
                 auto n_normal  =  normal(msh, neighbor, face);
                 auto cgp_id    =  gauss_points_positions<CellQuadType,FaceQuadType>
@@ -2370,8 +3301,8 @@ public:
                     throw std::invalid_argument("Invalid number domain.");
 
 
-                matrix_type n_rec_oper =  grad_global.at(neighbor_id);
-                vector_type nc_uh_TF   =  Uh_Th.at(neighbor_id);
+                matrix_type n_rec_oper =  grad_global.at(ngh_id);
+                vector_type nc_uh_TF   =  Uh_Th.at(ngh_id);
                 vector_type n_ruh      =  n_rec_oper * nc_uh_TF;
 
                 //WK: This should change if k different for each face
@@ -2398,8 +3329,8 @@ public:
                     vector_type c_str  = solution.st(qp.point(),number1) +   c_dphi_ruh;
                     vector_type n_str  = solution.st(qp.point(),number2) +  nc_dphi_ruh;
                     vector_type jump   = c_str - n_str;
-                    auto jp_value      = varpi * make_prod_stress_n( jump , c_normal);
-                    //auto proj_jump = make_prod_stress_n(tau + pst.alpha*dphi_r_uh , n);
+                    auto jp_value      = varpi * make_prod( jump , c_normal);
+                    //auto proj_jump = make_prod(tau + pst.alpha*dphi_r_uh , n);
                     eta_stress_loc  += qp.weight() * jp_value * jp_value;
                     cgp_id++;
                     ngp_id++;
@@ -2446,7 +3377,7 @@ public:
 
         std::cout << "eglobal_res : "<<eglobal_res<<"    ; eglobal_stress : "<< eglobal_stress<< std::endl;
 
-        T set_error(0.);
+        T set_error(0);
 
         disk::projector_nopre<mesh_type,
                             cell_basis_type,
@@ -2523,7 +3454,7 @@ public:
             auto err_dof = std::sqrt(diff_dof.dot(projk.cell_mm * diff_dof));
 
             //L2_error gradient
-            T error_dfun(0.);
+            T error_dfun(0);
             typedef typename disk::solution<T,2>::gradient_vector   gradient_vector;
             auto cqs = cell_quadrature.integrate(msh, cell);
 
@@ -2554,7 +3485,7 @@ public:
         ofs <<std::endl;
         ofs.close();
 
-        T new_set_error(0.);
+        T new_set_error(0);
         for(auto& e : eta)
         {
             auto cell_id = e.second;
@@ -2630,9 +3561,9 @@ public:
                 {
                     if(!msh.is_boundary(fc))
                     {
-                        auto  neighbor_id   = face_owner_cells_ids(msh,fc,cl);
-                        cmv_temp.at(neighbor_id) = 1;
-                        auto  neighbor      = *std::next(msh.cells_begin(),size_t(neighbor_id));
+                        auto  ngh_id   = msh.neighbor_id(cl, fc);
+                        cmv_temp.at(ngh_id) = 1;
+                        auto  neighbor      = *std::next(msh.cells_begin(),size_t(ngh_id));
                         auto  neighbor_fcs  = faces(msh,neighbor);
                         for(auto& nfc : neighbor_fcs)
                         {
@@ -2648,7 +3579,7 @@ public:
 
                                 if(!msh.is_boundary(nfc))
                                 {
-                                    auto  nn_id   = face_owner_cells_ids(msh,nfc,cl);
+                                    auto  nn_id   = msh.neighbor_id( cl, nfc);
                                     cmv_temp.at(nn_id) = 1;
                                 }
                             }
@@ -2677,6 +3608,7 @@ public:
         auto bar = barycenter(msh,fc);
         storage ->points.push_back(bar);
         faces_marks.at(fc_id).second = storage->points.size() -1;
+        std::cout << "     faces_mark.at("<<fc_id <<") = "<< faces_marks.at(fc_id).second << std::endl;
         //std::cout << "inside marker, marking bundary = "<<fc_id << std::endl;
     }
 
@@ -2694,7 +3626,7 @@ public:
             std::vector<typename point_type::id_type> vertices;
             if(msh.is_special_cell(cl))
             {
-                vertices = msh.get_vertices_ids(cl);
+                vertices = msh.get_vertices_pos(cl);
                 if(vertices.size() == 3)
                     special_tri = true;
             }
@@ -2729,14 +3661,14 @@ public:
                             face_mark_hanging_nodes(msh, fc);
 
                             //std::cout << "cell = "<< cl_id <<"    ; fc = "<< fc_id << std::endl;
-                            size_t neighbor_id = face_owner_cells_ids(msh, fc, cl);
+                            size_t ngh_id = msh.neighbor_id(cl, fc);
 
-                            typename cell_type::id_type id(neighbor_id);
+                            typename cell_type::id_type id(ngh_id);
                             auto  ngh_mark      = cells_marks.at(id);
                             if(cl_mark > ngh_mark)
                             {
-                                cells_marks.at(neighbor_id) = cl_mark - 1;
-                                auto  ngh  = *std::next(msh.cells_begin(),size_t(neighbor_id));
+                                cells_marks.at(ngh_id) = cl_mark - 1;
+                                auto  ngh  = *std::next(msh.cells_begin(),size_t(ngh_id));
                                 set_marks_hanging_nodes(msh, ngh);
                             }
 
@@ -2764,14 +3696,14 @@ public:
                         {
                             face_mark_hanging_nodes(msh, fc);
 
-                            size_t neighbor_id = face_owner_cells_ids(msh, fc, cl);
-                            typename cell_type::id_type id(neighbor_id);
+                            size_t ngh_id = msh.neighbor_id(cl, fc);
+                            typename cell_type::id_type id(ngh_id);
                             auto  ngh_mark      = cells_marks.at(id);
                             if(cl_mark > ngh_mark)
                             {
-                                cells_marks.at(neighbor_id) = cl_mark - 1;
-                                auto  ngh  = *std::next(msh.cells_begin(), size_t(neighbor_id));
-                                set_marks_hanging_nodes(msh, ngh);
+                                cells_marks.at(ngh_id) = cl_mark - 1;
+                                auto  ngh  = *std::next(msh.cells_begin(), size_t(ngh_id));
+                                set_marks_hanging_nodes(msh, ngh); // shoudn't it be written set_marks_hanging_nodes_4tri ?
                             }
 
                         }
@@ -2785,67 +3717,65 @@ public:
     void
     set_marks_hanging_nodes(mesh_type & msh, const cell_type & cl)
     {
+        //std::cout << "INSIDE SET MARKS" << std::endl;
+
         auto cl_id   = cl.get_id();
         auto cl_mark = cells_marks.at(cl_id);
         auto pts     = points(msh, cl);
         //To adapt also the neighbors take into account 3 and 2, otherwise just 3
+
+        //std::cout << " - CELL: "<< cl_id << std::endl;
         if(cl_mark == 3)
         //if(cl_mark > 1) /
         {
-
+            auto hgi = hang_nodes_vec.at(cl_id);
             bool special_tri = false;
-            std::vector<typename point_type::id_type> vertices;
-            if(msh.is_special_cell(cl))
-            {
-                vertices = msh.get_vertices_ids(cl);
-                if(vertices.size() == 3)
-                    special_tri = true;
-            }
 
-            if(special_tri)
+            if( hgi.has_hng_nodes)
             {
+                //std::cout << "--inside-cl_mark_hg " << std::endl;
+
                 auto fcs = faces(msh, cl);
-                auto it0 = pts.begin() + vertices.at(0);
-                auto it1 = pts.begin() + vertices.at(1);
-                auto it2 = pts.begin() + vertices.at(2);
-                auto it3 = pts.end() - 1;
-
-                std::vector<face_type> mark_faces;
-                if( it0  + 1 == it1)
-                    mark_faces.push_back(fcs.at(vertices.at(0)));
-                if( it1  + 1 == it2)
-                    mark_faces.push_back(fcs.at(vertices.at(1)));
-                if( it2 == it3)
-                    mark_faces.push_back(fcs.at(vertices.at(2)));
-
+                //std::cout << "num_faces: "<< fcs.size() << std::endl;
+                size_t fcont = 0;
                 // la diferencia con esta parte es que no es recursiva: Asi que debe llamarse de nuevo la funcion en los if anteriores
-                for(auto& fc : mark_faces)
+                for(auto fc : fcs)
                 {
-                    if(msh.is_boundary(fc))
-                       face_mark_hanging_nodes(msh, fc);
-                    else
+                    auto fcs_pts = points(msh, fc);
+                    #if 0
+                    std::cout << "---fc : "<<fcont << std::endl;
+                    std::cout << "---fc_points : "<< fcs_pts[0]<<" "<< fcs_pts[1]<< std::endl;
+                    std::cout << "---fc_is_bnd : "<< msh.is_boundary(fc) << std::endl;
+                    std::cout << "---fc_has_hg : "<< hgi.faces_has_hang_nodes.at(fcont) << std::endl;
+                    #endif
+                    if(hgi.faces_has_hang_nodes.at(fcont) == 0)
                     {
-                        auto  fc_id    = msh.lookup(fc);
-                        if(!faces_marks.at(fc_id).first)
-                        {
-
+                        //std::cout << "----fc without hg" << std::endl;
+                        if(msh.is_boundary(fc))
                             face_mark_hanging_nodes(msh, fc);
-
-                            //std::cout << "cell = "<< cl_id <<"    ; fc = "<< fc_id << std::endl;
-                            size_t neighbor_id = face_owner_cells_ids(msh, fc, cl);
-
-                            typename cell_type::id_type id(neighbor_id);
-                            auto  ngh_mark      = cells_marks.at(id);
-                            if(cl_mark > ngh_mark)
+                        else
+                        {
+                            auto  fc_id    = msh.lookup(fc);
+                            if(!faces_marks.at(fc_id).first)
                             {
-                                cells_marks.at(neighbor_id) = cl_mark - 1;
-                                auto  ngh  = *std::next(msh.cells_begin(),size_t(neighbor_id));
-                                set_marks_hanging_nodes(msh, ngh);
-                            }
+                                face_mark_hanging_nodes(msh, fc);
 
+                                //std::cout << "cell = "<< cl_id <<"    ; fc = "<< fc_id << std::endl;
+                                size_t ngh_id = msh.neighbor_id(cl, fc);
+
+                                typename cell_type::id_type id(ngh_id);
+                                auto  ngh_mark      = cells_marks.at(id);
+
+                                if(cl_mark > ngh_mark)
+                                {
+                                    cells_marks.at(ngh_id) = cl_mark - 1;
+                                    auto  ngh  = *std::next(msh.cells_begin(),size_t(ngh_id));
+                                    set_marks_hanging_nodes(msh, ngh);
+                                }
+                            }
                         }
                     }
-
+                    fcont++;
                 }
             }
             if(pts.size() == 3)
@@ -2865,13 +3795,13 @@ public:
                         {
                             face_mark_hanging_nodes(msh, fc);
 
-                            size_t neighbor_id = face_owner_cells_ids(msh, fc, cl);
-                            typename cell_type::id_type id(neighbor_id);
+                            size_t ngh_id = msh.neighbor_id(cl, fc);
+                            typename cell_type::id_type id(ngh_id);
                             auto  ngh_mark      = cells_marks.at(id);
                             if(cl_mark > ngh_mark)
                             {
-                                cells_marks.at(neighbor_id) = cl_mark - 1;
-                                auto  ngh  = *std::next(msh.cells_begin(), size_t(neighbor_id));
+                                cells_marks.at(ngh_id) = cl_mark - 1;
+                                auto  ngh  = *std::next(msh.cells_begin(), size_t(ngh_id));
                                 set_marks_hanging_nodes(msh, ngh);
                             }
 
@@ -2899,8 +3829,8 @@ public:
             {
                 if(!msh.is_boundary(fc))
                 {
-                    auto  neighbor_id = face_owner_cells_ids(msh,fc,cl);
-                    auto  ngh_mark    = cells_marks.at(neighbor_id);
+                    auto  ngh_id = msh.neighbor_id(cl, fc);
+                    auto  ngh_mark    = cells_marks.at(ngh_id);
                     auto  fc_id    = msh.lookup(fc);
                     if(!faces_marks.at(fc_id).first)
                     {
@@ -2912,10 +3842,10 @@ public:
                     if(ngh_mark < cl_mark)
                     {
                         if(ngh_mark == 1)
-                            cells_marks.at(neighbor_id) = 2;
+                            cells_marks.at(ngh_id) = 2;
                         else
-                            cells_marks.at(neighbor_id) = cl_mark - 1;
-                        auto  ngh = *std::next(msh.cells_begin(), size_t(neighbor_id));
+                            cells_marks.at(ngh_id) = cl_mark - 1;
+                        auto  ngh = *std::next(msh.cells_begin(), size_t(ngh_id));
                         set_marks(msh,ngh);
                     }
 
@@ -3025,7 +3955,7 @@ public:
 
         if( find1 || find2 )
             return true;
-        return false;
+        return false; //how this could happen?
     }
 
 
@@ -3379,6 +4309,31 @@ public:
         }
     }
 
+    struct point_info
+    {
+        point_info(){};
+        size_t id;
+        std::pair<size_t, int> cells;
+        size_t point_id;
+        size_t face_id;
+        bool operator < (const point_info& pi) const
+        {
+            return (id < pi.id);
+        }
+
+        friend std::ostream& operator <<(std::ostream& os, const point_info& p)
+        {
+            os << "Point info:";
+            os << " * id : "<< p.id << std::endl;
+            os << " * point_id : "<< p.point_id << std::endl;
+            os << " * face_id  : "<< p.face_id << std::endl;
+            os << " * cells    :"<<std::endl;
+            os << "   "<< p.cells.first << "  "<<p.cells.second  <<std::endl;
+            return os;
+        }
+    };
+
+#if 0
     template<typename IdxVector>
     void
     refine_special_triangle(mesh_type& msh,
@@ -3388,18 +4343,6 @@ public:
     {
         bool do_bar;
         size_t i(0), j(0);
-        struct point_info
-        {
-            point_info(){};
-            size_t id;
-            std::pair<size_t, int> cells;
-            size_t point_id;
-            size_t face_id;
-            bool operator < (const point_info& pi) const
-            {
-                return (id < pi.id);
-            }
-        };
         auto storage  = msh.backend_storage();
 
         auto pts      = points(msh,cl);
@@ -3451,7 +4394,7 @@ public:
                 auto w   = vertices.at((i + 1)% 3);
                 auto l_dist  =  0.;
                 auto r_dist  =  ( *std::next(pts.begin() , w) -  *std::next(pts.begin(), v)).to_vector().norm();
-                auto b_dist  =  (r_dist - l_dist) / 2.;
+                auto b_dist  =  0.5 * (r_dist - l_dist) ;
 
                 if( std::abs(b_dist) < 1.e-10)
                     throw std::logic_error("Flat triangle");
@@ -3500,6 +4443,8 @@ public:
 
             i++;
         }
+
+
         std::sort(owner_cells.begin(), owner_cells.end());
         auto cid  = cl.get_id();
         size_t ii = 0;
@@ -3515,6 +4460,7 @@ public:
                     ii++;
                 }
         }
+
         if(ii != 3)
             throw std::logic_error(" Triangle in the middle has less/more than 3 faces");
 
@@ -3644,7 +4590,402 @@ public:
             }
         }
     }
+#endif
+    template<typename IdxVector>
+    void
+    refine_special_triangle(mesh_type& msh,
+                            const cell_type& cl,
+                            const IdxVector& vertices,
+                            const size_t& cl_level)
+    {
+        //std::cout << "INSIDE REFINE SPECIAL TRIANGLE" << std::endl;
+        //std::cout << " - CELL : "<< cl.get_id() << std::endl;
 
+        bool do_bar;
+        size_t i(0), j(0);
+        auto storage  = msh.backend_storage();
+
+        auto pts      = points(msh,cl);
+        auto pts_ids  = cl.point_ids();
+        auto fcs_ids  = cl.faces_ids();
+
+        std::vector<point_info> owner_cells;
+        owner_cells.reserve(pts_ids.size());
+
+        auto cell_id  = cl.get_id();
+        auto hgi   = hang_nodes_vec.at(cell_id);
+
+        for(auto & v:vertices)
+        {
+            if(!hgi.faces_has_hang_nodes.at(v))
+            {
+                //std::cout << "make bar" << std::endl;
+                auto fc_id  = fcs_ids.at(v);
+                auto bar_id = faces_marks.at(fc_id).second;
+
+                point_info npb, npv;
+                npv.id = v + j;                     npv.cells    = std::make_pair(i , -1);
+                npb.id = v + j + 1;                 npb.cells    = std::make_pair(i , ( i + 1)%3);
+                npv.point_id = pts_ids.at(v);       npv.face_id  = fc_id;
+                npb.point_id = bar_id;              npb.face_id  = fc_id;
+
+                owner_cells.push_back(npv);
+                owner_cells.push_back(npb);
+                j++;
+            }
+            else
+            {
+                auto w   = vertices.at((i + 1)% 3);
+                auto l_dist  =  0.;
+                auto r_dist  =  ( *std::next(pts.begin() , w) -  *std::next(pts.begin(), v)).to_vector().norm();
+                auto b_dist  =  0.5 * (r_dist - l_dist) ;
+
+                if( std::abs(b_dist) < 1.e-8)
+                    throw std::logic_error("Flat triangle or angle too small");
+
+                auto fc_id  = fcs_ids.at(v);
+                auto next_fc_id  = fcs_ids.at((v + 1)% pts.size());
+
+                auto fc_mark = faces_marks.at(fc_id).first;
+                auto next_fc_mark = faces_marks.at(next_fc_id).first;
+
+                //1.
+                point_info  npv;
+                npv.id  = v + j;
+                npv.point_id = pts_ids.at(v);
+                npv.face_id  = fc_id;
+                npv.cells = std::make_pair(i , -1);
+                owner_cells.push_back(npv);
+
+                if(!fc_mark && !next_fc_mark)
+                {
+                    point_info  npf;
+
+                    //2.
+                    npf.id  = v + j + 1;
+                    npf.point_id = pts_ids.at((v + 1)%pts.size());
+                    npf.face_id  = next_fc_id;
+                    npf.cells    = std::make_pair(i , (i + 1) % 3);
+
+                    assert( msh.is_boundary(fc_id) == msh.is_boundary(next_fc_id) );
+
+                    owner_cells.push_back(npf);
+                    j++;
+
+                    //std::cout << "  Owner_cells:"<< i << std::endl;
+                    //for (auto& np : owner_cells)
+                    //    std::cout << np << std::endl;
+                }
+                else
+                {
+                    if(fc_mark)
+                    {
+                        point_info  npf;
+                        npf.id       = v + j + 1;
+                        npf.face_id  = fc_id;
+                        npf.point_id = faces_marks.at(fc_id).second;
+                        npf.cells = std::make_pair(i , -1);
+
+                        owner_cells.push_back(npf);
+                        j++;
+                    }
+
+                    point_info  npb;
+                    npb.id  = v + 1 + j;
+                    npb.point_id = pts_ids.at((v + 1) %pts.size());
+                    npb.face_id  = next_fc_id;
+                    npb.cells    = std::make_pair(i , (i + 1) % 3);
+                    owner_cells.push_back(npb);
+
+                    if(next_fc_mark)
+                    {
+                        point_info  npf;
+                        npf.id       = v + j + 2;
+                        npf.face_id  = next_fc_id;
+                        npf.point_id = faces_marks.at(next_fc_id).second;
+                        npf.cells    = std::make_pair((i + 1) % 3 , -1);
+
+                        owner_cells.push_back(npf);
+                        j++;
+                    }
+                    //std::cout << "  Owner_cells:"<< i << std::endl;
+                    //for (auto& np : owner_cells)
+                    //    std::cout << np << std::endl;
+                }
+
+            }
+
+            i++;
+        }
+
+
+        std::sort(owner_cells.begin(), owner_cells.end());
+        auto cid  = cl.get_id();
+        size_t ii = 0;
+        n_gon<3> t3;
+
+        for (auto& np : owner_cells)
+        {
+                auto is_barycenter = ( np.cells.second != -1)?  true : false;
+                if(is_barycenter)
+                {
+                    t3.p.at(ii) = np.point_id;
+                    t3.b.at(ii) = false;
+                    ii++;
+                }
+        }
+
+        std::cout << "  Inside triangle: " << std::endl;
+        std::cout << "   * "<< t3 << std::endl;
+        if(ii != 3)
+            throw std::logic_error(" Triangle in the middle has less/more than 3 faces");
+
+        store(t3,m_triangles);
+        l_triangles.push_back(std::make_pair(cl_level,cl.get_id()));
+
+        for(size_t j = 0; j < 3; j++)
+        {
+            std::vector<size_t> pts_ids;
+            std::vector<size_t> fcs_ids;
+
+            pts_ids.reserve(3);
+            fcs_ids.reserve(3);
+
+            for (auto i = owner_cells.begin(); i != owner_cells.end(); ++i)
+            {
+                auto np = *i;
+                auto in_triangle = (np.cells.first == j) || (np.cells.second == j)?  true : false;
+                if(in_triangle)
+                {
+                    auto  pt_id = np.point_id;
+                    auto  fc_id = np.face_id;
+                    pts_ids.push_back(pt_id);
+                    fcs_ids.push_back(fc_id);
+
+                }
+            }
+
+            auto new_num_fcs = fcs_ids.size();
+            if(new_num_fcs == 3)
+            {
+                auto nt = put_n_gon<3>(msh, fcs_ids, pts_ids);
+
+                std::cout << "  Outside triangle: " << std::endl;
+                std::cout << "   * "<< nt << std::endl;
+
+                store(nt,m_triangles);
+                l_triangles.push_back(std::make_pair(cl_level, cl.get_id()));
+            }
+            if(new_num_fcs == 4)
+            {
+                auto nt = put_n_gon<4>(msh, fcs_ids, pts_ids);
+
+                std::cout << "  Outside triangle: " << std::endl;
+                std::cout << "   * "<< nt << std::endl;
+
+                store(nt,m_quadrangles);
+                l_quadrangles.push_back(std::make_pair(cl_level, cl.get_id()));
+            }
+            if(new_num_fcs == 5)
+            {
+                auto nt = put_n_gon<5>(msh, fcs_ids, pts_ids);
+
+                std::cout << "  Outside triangle: " << std::endl;
+                std::cout << "   * "<< nt << std::endl;
+
+                store(nt,m_pentagons);
+                l_pentagons.push_back(std::make_pair(cl_level, cl.get_id()));
+            }
+
+
+            if(new_num_fcs > 5)
+            {
+                std::cout << "number of faces = "<< new_num_fcs << std::endl;
+                throw std::logic_error("number of faces exceeds maximum. At least more than 1 hanging node is allowed, triangle cann't have more than 5 faces.");
+            }
+        }
+    }
+
+#if 0
+    template<typename IdxVector>
+    void
+    refine_special_triangle(mesh_type& msh,
+                            const cell_type& cl,
+                            const IdxVector& vertices,
+                            const size_t& cl_level)
+    {
+        if(vertices.size()>3)
+            throw std::logic_error("This is not a triangle. Check refine_single_with_hanging_nodes or number of vertices");
+        bool do_bar;
+        size_t i(0), j(0);
+        auto storage  = msh.backend_storage();
+
+        auto pts      = points(msh,cl);
+        auto pts_ids  = cl.point_ids();
+        auto fcs_ids  = cl.faces_ids();
+
+
+        //std::vector<std::array<int,5>> owner_cells;
+
+        std::vector<point_info> owner_cells;
+        owner_cells.reserve(pts_ids.size());
+
+        //iter it0 = pts.begin() + vertices.at(0);// 0
+        //iter it1 = pts.begin() + vertices.at(1);// 3
+        //iter it2 = pts.begin() + vertices.at(2);// 4
+        //iter it3 = pts.begin() + pts.size();
+
+        //if( it0  + 1 == it1)
+        //if( it1  + 1 == it2)
+        //if( it2 == it3)
+        //std::cout << "INSIDE SPECIAL REFINEMENT" << std::endl;
+        std::cout << "owner_cells :" << std::endl;
+        for (auto& np : owner_cells)
+            std::cout << np << std::endl;
+
+        std::cout << "POINTS ("<< cl.get_id()<<"):" << std::endl;
+        for(auto & p:pts)
+        {
+            std::cout <<  p.x() << " "<< p.y() << std::endl;
+        }
+        for(auto & v:vertices)
+        {
+            std::cout <<" ****** vertex :"<< v <<" *******" << std::endl;
+            //auto it     = (i != 2)? vertices.at(i + 1) :  pts.size() - 1;
+            int  factor = (i != 2)? 1 : 0;
+            auto iter_v = pts_ids.begin() + v + factor;
+            auto iter_next_vertex = (i != 2)?  pts_ids.begin() + vertices.at(i + 1) : pts_ids.end() - 1;
+
+            if( iter_v  == iter_next_vertex)
+            {
+                auto fc_id  = fcs_ids.at(v);
+                auto bar_id = faces_marks.at(fc_id).second;
+
+                point_info npb, npv;
+                npv.id = v + j;                     npv.cells    = std::make_pair(i , -1);
+                npb.id = v + j + 1;                 npb.cells    = std::make_pair(i , ( i + 1)%3);
+                npv.point_id = pts_ids.at(v);       npv.face_id  = fc_id;
+                npb.point_id = bar_id;              npb.face_id  = fc_id;
+
+                //owner_cells.push_back({ v + j, i , -1 , int(pts_ids.at(v)), int(fc_id)});
+                //owner_cells.push_back({ v + 1 + j, i , (i +1)%3 , int(bar_id), int(fc_id)});
+                owner_cells.push_back(npv);
+                owner_cells.push_back(npb);
+                j++;
+
+                std::cout << " ADD BAR  "<< i << std::endl;
+                std::cout << "  1-"<<npv<< std::endl;
+                std::cout << "  2-"<<npb<< std::endl;
+
+                std::cout << "owner_cells :" << std::endl;
+                for (auto& np : owner_cells)
+                    std::cout << np << std::endl;
+
+            }
+            else
+            {
+                auto w   = vertices.at((i + 1)% 3);
+                auto l_dist  =  0.;
+                auto r_dist  =  ( *std::next(pts.begin() , w) -  *std::next(pts.begin(), v)).to_vector().norm();
+                auto b_dist  =  0.5 * (r_dist - l_dist) ;
+
+                if( std::abs(b_dist) < 1.e-8)
+                    throw std::logic_error("Flat triangle or angle too small");
+                auto fc_id  = fcs_ids.at(v);
+                auto ffc_id = fcs_ids.at(v+1);
+
+                point_info  npx, npf;
+
+                //1.
+                npx.id  = v + j;
+                npx.point_id = pts_ids.at(v);
+                npx.face_id  = fc_id;
+                npx.cells    = std::make_pair(i , -1);
+
+                //2.
+                npf.id  = v + j + 1;
+                npf.point_id = pts_ids.at(v + 1);
+                npf.face_id  = ffc_id;
+                npf.cells    = std::make_pair(i , (i + 1) % 3);
+
+                assert( msh.is_boundary(fc_id) == msh.is_boundary(ffc_id) );
+
+                owner_cells.push_back(npx);
+                owner_cells.push_back(npf);
+                j++;
+
+            }
+
+            i++;
+
+
+        }
+
+        std::cout << "owner_cells :" << std::endl;
+        for (auto& np : owner_cells)
+            std::cout << np << std::endl;
+
+        std::sort(owner_cells.begin(), owner_cells.end());
+
+        auto cid  = cl.get_id();
+        size_t ii = 0;
+        n_gon<3> t3;
+
+        for (auto& np : owner_cells)
+        {
+                auto is_barycenter = ( np.cells.second != -1)?  true : false;
+                if(is_barycenter)
+                {
+                    t3.p.at(ii) = np.point_id;
+                    t3.b.at(ii) = false;
+                    ii++;
+                }
+        }
+
+        if(ii != 3)
+            throw std::logic_error(" Triangle in the middle has less/more than 3 faces");
+
+        store(t3,m_triangles);
+        l_triangles.push_back(std::make_pair(cl_level,cl.get_id()));
+
+        for(size_t j = 0; j < 3; j++)
+        {
+            std::vector<size_t> pts_ids;
+            std::vector<size_t> fcs_ids;
+
+            pts_ids.reserve(3);
+            fcs_ids.reserve(3);
+
+            for (auto i = owner_cells.begin(); i != owner_cells.end(); ++i)
+            {
+                auto np = *i;
+                auto in_triangle = (np.cells.first == j) || (np.cells.second == j)?  true : false;
+                if(in_triangle)
+                {
+                    auto  pt_id = np.point_id;
+                    auto  fc_id = np.face_id;
+                    pts_ids.push_back(pt_id);
+                    fcs_ids.push_back(fc_id);
+
+                }
+            }
+
+            auto new_num_fcs = fcs_ids.size();
+            if(new_num_fcs == 3)
+            {
+                auto nt = put_n_gon<3>(msh, fcs_ids, pts_ids);
+                store(nt, m_triangles);
+                l_triangles.push_back(std::make_pair(cl_level, cl.get_id()));
+            }
+            if(new_num_fcs == 4)
+            {
+                auto nt = put_n_gon<4>(msh, fcs_ids, pts_ids);
+                store(nt,m_quadrangles);
+                l_quadrangles.push_back(std::make_pair(cl_level, cl.get_id()));
+            }
+        }
+    }
+#endif
     void
     refine_single_with_hanging_nodes(mesh_type& msh,
                                      const cell_type& cl,
@@ -3662,25 +5003,24 @@ public:
         Only cells          => if(cl_mark == 3)*/
         if(cl_mark == 3)
         {
-
             if(msh.is_special_cell(cl))
             {
-                auto vertices =  msh.get_vertices_ids(cl);
+                auto vertices_pos =  msh.get_vertices_pos(cl);
 
-                switch (vertices.size())
+                switch (vertices_pos.size())
                 {
                     case 1:
                     case 2:
                         throw std::logic_error("Number of faces cannot be less than 3");
                         break;
                     case 3:
-                        refine_special_triangle(msh, cl, vertices,cl_level);
+                        refine_special_triangle(msh, cl, vertices_pos,cl_level);
                         break;
                     //case 4:
                     //    refine_quadrangle();
                     //    break;
                     default:
-                        refine_special_other(msh, cl, vertices,cl_level); //WK: try to do the same for quadrangles
+                        refine_special_other(msh, cl, vertices_pos,cl_level); //WK: try to do the same for quadrangles
                         break;
                 }
             }
@@ -3818,13 +5158,14 @@ public:
     }
 
     template<typename LoaderType>
-    void refine( mesh_type & msh,
-                const std::vector<vector_type>&  Uh_Th,
-                const size_t& degree)
+    auto
+    refine( const mesh_type & old_msh,
+            const size_t    & degree)
     {
-        mesh_type re_msh, new_mesh;
+        mesh_type re_msh, new_mesh, msh;
 
-        re_msh = msh;
+        msh = old_msh;
+        re_msh  = msh;
 
         auto storage    = msh.backend_storage();
         auto re_storage = re_msh.backend_storage();
@@ -3832,7 +5173,13 @@ public:
         size_t nds_counter = 0;
 
         face_marker(re_msh);
-        dump_to_matlab(msh, mp.directory + "/mesh" + mp.summary +".m",cells_marks);
+
+        auto other_info = mp.summary + "_RC" + tostr(imsh);
+        auto marks_filename = mp.directory + "/marks" + other_info + ".txt";
+        auto mesh_filename  = mp.directory + "/mesh"  + other_info + ".m";
+
+        dump_to_matlab(msh, mesh_filename, cells_marks);
+        save_data(cells_marks, marks_filename);
 
         for(auto& cl : msh)
         {
@@ -3977,8 +5324,7 @@ public:
             std::cout << l;
         std::cout<< std::endl;
 
-        old_msh = msh;
-        msh     = new_mesh;
+        return new_mesh;
     }
     template <typename LoaderType>
     bool
@@ -4026,6 +5372,7 @@ public:
         }
     }
 
+
     template <typename LoaderType>
     bool
     save_levels_info(const LoaderType& loader,
@@ -4054,8 +5401,7 @@ public:
 
 template<typename MeshType, typename T,
         typename CellBasisType, typename CellQuadType,
-        typename FaceBasisType, typename FaceQuadType,
-        typename PointType>
+        typename FaceBasisType, typename FaceQuadType>
 std::vector<dynamic_vector<T>>
 proj_rec_solution(const MeshType& new_msh,
                   const MeshType& old_msh,
@@ -4070,7 +5416,7 @@ proj_rec_solution(const MeshType& new_msh,
     typedef FaceBasisType           face_basis_type;
     typedef CellQuadType            cell_quadrature_type;
     typedef FaceQuadType            face_quadrature_type;
-    typedef PointType               point_type;
+    typedef typename MeshType::point_type     point_type;
     typedef T  scalar_type;
     typedef dynamic_vector<scalar_type>     vector_type;
     typedef dynamic_matrix<scalar_type>     matrix_type;
@@ -4108,7 +5454,7 @@ proj_rec_solution(const MeshType& new_msh,
         //typedef std::function<T (const point_type & p, const size_t n)>    function;
         auto rec_fun =  [&](const point_type& p, const size_t number) -> scalar_type
         {
-            scalar_type ret(0.);
+            scalar_type ret(0);
 
             auto phi  = cb.eval_functions(old_msh, ancestor_cell, p);
 
@@ -4124,6 +5470,7 @@ proj_rec_solution(const MeshType& new_msh,
 
     return ret;
 }
+
 
 
 }//end Disk

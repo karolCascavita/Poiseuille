@@ -855,7 +855,11 @@ public:
         {
             auto current_face_range = dsr.face_range(face_i);
             auto fbs = current_face_range.size();
-            auto h = diameter(msh, /*fcs[face_i]*/cl);
+
+            auto pts = points(msh,cl);
+            auto vts = msh.get_vertices(cl, pts);
+            auto h   = diameter(msh, vts);
+            //auto h = diameter(msh, /*fcs[face_i]*/cl);
 
             Eigen::LLT<matrix_type> piKF;
             piKF.compute(stab_f_matrices[face_i].get());
@@ -927,6 +931,8 @@ public:
 
     void compute(const mesh_type& msh, const cell_type& cl, const matrix_type& gradrec_oper)
     {
+        auto pts = points(msh,cl);
+
         matrix_type mass_mat = matrix_type::Zero(cell_basis.size(), cell_basis.size());
 
         auto cell_quadpoints = cell_quadrature.integrate(msh, cl);
@@ -967,7 +973,11 @@ public:
         {
             auto current_face_range = dsr.face_range(face_i);
             auto fbs = current_face_range.size();
-            auto h = diameter(msh, /*fcs[face_i]*/cl);
+
+            auto vts = msh.get_vertices(cl, pts);
+            auto h   = diameter(msh, vts);
+
+            //auto h = diameter(msh, /*fcs[face_i]*/cl);
             auto fc = fcs[face_i];
 
             matrix_type face_mass_matrix    = matrix_type::Zero(fbs, fbs);
@@ -1551,23 +1561,6 @@ compute_L2_error(LocalData& ld, size_t degree, const Function& f,
     dynamic_vector<scalar_type> diff = proj - dofs.head(dof_range.size());
 
     return diff.dot(mass*diff);
-}
-template< typename T, typename Storage, typename CellType>
-T
-set_cell_number(const mesh<T,2,Storage>& msh, const CellType& cl)
-{
-    T x0 = 0.5;
-    auto pts = points(msh, cl);
-    size_t number = 0;
-    for(auto& p : pts)
-    {
-        if(p.x() < x0)
-            number = 1;
-        if(p.x() > x0)
-            number = 2;
-    }
-    if(number == 0)
-        throw std::invalid_argument("Invalid number domain.");
 }
 
 
