@@ -136,6 +136,7 @@ public:
     assembler_type          assembly_pst;
     plast_type              plasticity;
     std::vector<size_t>             levels_vec;
+    std::vector<size_t>             ancestors_vec;
     disk::plasticity_data<T>        m_pst;
     std::vector<dynamic_vector<T>>  Uh_Th;
     std::vector<disk::tensors<T>>   tsr_vec;
@@ -236,7 +237,7 @@ public:
                     if(!do_refinement)
                         return false;
 
-                    sbm.template refine<LoaderType>(msh, Uh_Th, m_degree);
+                    msh = sbm.template refine<LoaderType>(msh, Uh_Th, m_degree);
 
                     //if(!is_succesful)
                     //    throw std::logic_error("Refinement not done");
@@ -257,7 +258,7 @@ public:
                 }
                 else
                 {
-                    sbm.template refine<LoaderType>(msh, Uh_Th, m_degree);
+                    msh = sbm.template refine<LoaderType>(msh, Uh_Th, m_degree);
                     //Normal adaptation
                     std::vector<vector_type>().swap(Uh_Th);
                     Uh_Th  = solution_zero_vector(msh, m_degree);
@@ -275,7 +276,7 @@ public:
                     //WARNINGK: Revisar si se requiere refine, y la proyeccion.
                     //Esto deberia estar aqui, de lo contrario no se va a adaptar nada.
                     //ademas tambien deberia preguntarse si se recicla o no la solution y ahi si proj_rec_solution
-                    sbm.template refine<LoaderType>(msh, Uh_Th, m_degree);
+                    msh = sbm.template refine<LoaderType>(msh, Uh_Th, m_degree);
 
                     std::vector<matrix_type> grad_global;
                     grad_global =  precompute_gradient(msh, gradrec_pst);
@@ -298,7 +299,10 @@ public:
 
             if(mp.recycle && imsh > 0)
             {
-                tsr_vec = sigma_interpolation(msh, old_msh, tsr_vec, sbm.ancestors, m_degree);
+                tsr_vec = sigma_interpolation(msh, old_msh, tsr_vec, sbm.ancestors,
+                                                            sbm.cells_marks, m_degree);
+
+
 
                 std::vector<matrix_type>   sigma;
                 auto quad_degree = tsr_vec.at(0).quad_degree;
@@ -364,7 +368,7 @@ public:
     #endif
 
     template<typename LoaderType>
-    void
+    auto
     load_data_procedure(mesh_type  & old_msh,
                     const disk::plasticity_data<T>& pst,
                     const disk::mesh_parameters<T>& mp,
@@ -377,7 +381,7 @@ public:
         mesh_type      new_msh;
         LoaderType     new_loader;
 
-        auto info_other   =  mp.summary + "_" + mp.short_mesh_name + ".typ1";
+        auto info_other   =  mp.summary_old + "_" + mp.short_mesh_name + ".typ1";
         auto new_msh_file =  mp.directory + "/amesh_" + tostr(imsh) + info_other;
 
         if (!new_loader.read_mesh(new_msh_file))
@@ -385,39 +389,45 @@ public:
 
         new_loader.populate_mesh(new_msh);
         auto num_cells  = new_msh.cells_size();
-        auto ancestors  = sizet_vector_type(num_cells);
-        levels_vec      = sizet_vector_type(num_cells);
-
-        //2 load ancestors and level info
-        std::vector<std::pair<size_t,size_t>> levels_ancestors;
-        sizet_vector_type   index_transf;
-        disk::load_data(levels_ancestors, index_transf, mp, imsh);
-        assert( num_cells  == levels_ancestors.size());
-
-        //3. Ancestors an levels
-        levels_vec = sizet_vector_type(num_cells);
-
-        size_t i = 0;
-        for(auto& pair : levels_ancestors)
-        {
-            levels_vec.at(i) = pair.first;
-            ancestors.at(i)  = pair.second;
-            i++;
-        }
 
         if(!mp.recycle)
         {
             std::vector<vector_type>().swap(Uh_Th);
             Uh_Th   = solution_zero_vector(new_msh, m_degree);
             tsr_vec = disk::tensor_zero_vector(new_msh, m_degree);
+
         }
         else
         {
+            auto ancestors  = sizet_vector_type(num_cells);
+            levels_vec      = sizet_vector_type(num_cells);
+
+            //2 load ancestors and level info
+            std::vector<std::pair<size_t,size_t>> levels_ancestors;
+            sizet_vector_type   index_transf;
+            disk::load_data(levels_ancestors, index_transf, mp, "/levels","R", imsh);
+            assert( num_cells  == levels_ancestors.size());
+
+            //3. Ancestors an levels
+            levels_vec = sizet_vector_type(num_cells);
+
+            size_t i = 0;
+            for(auto& pair : levels_ancestors)
+            {
+                levels_vec.at(i) = pair.first;
+                ancestors.at(i)  = pair.second;
+                i++;
+            }
+
             //Load Uh_Th and tensor data
-            disk::load_data(Uh_Th, mp, imsh);
-            disk::load_data(tsr_vec, mp, imsh);
+            disk::load_data(Uh_Th, mp, "/Uh","R", imsh - 1);
+            disk::load_data(tsr_vec, mp, "R",imsh);
             assert( Uh_Th.size()  == old_msh.cells_size());
             assert( tsr_vec.size()== old_msh.cells_size());
+
+            //4. cells_marks
+            auto cells_marks = sizet_vector_type(num_cells);
+            disk::load_data(cells_marks, mp, "/marks", "RC", imsh);
 
             //2_Precompute Gradient reconstruction operator
             std::vector<matrix_type> grad_global;
@@ -430,7 +440,8 @@ public:
                                                         point_type>
                     (new_msh, old_msh, grad_global, Uh_Th, ancestors, m_degree);
 
-            tsr_vec = sigma_interpolation(new_msh, old_msh, tsr_vec, ancestors, m_degree);
+            tsr_vec = sigma_interpolation(new_msh, old_msh, tsr_vec, ancestors,
+                                                        cells_marks,  m_degree);
 
             std::vector<matrix_type>   sigma;
             auto quad_degree = tsr_vec.at(0).quad_degree;
@@ -441,7 +452,7 @@ public:
         }
 
         //Updating the mesh
-        old_msh = new_msh;
+        return new_msh;
     }
 
     #if 0
@@ -494,14 +505,12 @@ public:
     {
         bool refine;
 
-        disk::stress_based_mesh<mesh_type>  sbm(msh, levels_vec, pst, mp, imsh);
-
         if( imsh == mp.initial_imsh)
         {
             if(mp.initial_imsh == 0)
                 refine = adaptation_procedure(msh, loader, solution, pst, mp, imsh);
             else
-                load_data_procedure<LoaderType>(msh, pst, mp, imsh);
+                msh = load_data_procedure<LoaderType>(msh, pst, mp, imsh);
             return true;
         }
         else
@@ -509,6 +518,8 @@ public:
             refine = adaptation_procedure(msh, loader, solution, pst, mp, imsh);
             return refine;
         }
+        //h = mesh_h_max(msh);
+        //mp.alpha = 1./h;
     }
 
     template<typename MeshParameters>
@@ -590,6 +601,13 @@ public:
 
             vec.at(i) = v;
             i++;
+
+            auto cell_id = cl.get_id();
+            auto uTF = Uh_Th.at(cell_id);
+            //std::cout << "cell : "<< cell_id << std::endl;
+            //std::cout << "* rec_oper.size : "<< v.rec_oper.rows()<< " x "<< v.rec_oper.cols() << std::endl;
+            //std::cout << "* uTF.size : "<< uTF.rows()<< " x "<< uTF.cols() << std::endl;
+
         }
         return vec;
     }
@@ -597,7 +615,7 @@ public:
 
 
     void
-    make_stiff_matrix(const mesh_type&  msh,
+    make_stiff_matrix(mesh_type&  msh,
                       const scalar_type factor,
                       const std::vector<bilinear_forms>& biforms,
                       const size_t iter)
@@ -706,7 +724,7 @@ public:
     }
     template<typename BiformsType, typename Solution, typename MeshParameters>
     auto
-    make_rhs_vector(const mesh_type&    msh,
+    make_rhs_vector(mesh_type&    msh,
                     const BiformsType&  biforms,
                     const Solution&     solution,
                     const MeshParameters& mp,
@@ -726,7 +744,14 @@ public:
             if(mp.diff)  //Only for diffusion test
                 pst_rhs  = plasticity.compute(msh, cl, rec_oper, Uh_Th.at(cell_id), solution);
             else         //Uncomment this for plasticity
+            {
+                auto uTF =  Uh_Th.at(cell_id);
+                //std::cout << "cell : "<< cell_id << std::endl;
+                //std::cout << "* rec_oper.size : "<< rec_oper.rows()<< " x "<< rec_oper.cols() << std::endl;
+                //std::cout << "* uTF.size : "<< uTF.rows()<< " x "<< uTF.cols() << std::endl;
                 pst_rhs = plasticity.compute(msh, cl, rec_oper, Uh_Th.at(cell_id), tsr);
+
+            }
 
             //WK: if diffusion changes with domain, it would be mandatory to include mu here, to do it locally
             vector_type Bc = statcond_pst.compute_rhs(msh, cl, loc_mat, cell_rhs,
@@ -800,7 +825,7 @@ public:
     }
     template<typename Solution, typename MeshParameters>
     void
-    test_plasticity(const mesh_type& msh,
+    test_plasticity( mesh_type& msh,
                     const Solution& solution,
                     const MeshParameters& mp,
                     const size_t imsh)
@@ -895,25 +920,8 @@ public:
         tfs.close();
         return;
     }
-    
-    test_variable_ADMM()
-    {
-        auto alpha_max = ;
-        auto alpha_min = ;
 
-        auto beta_max  = ;
-        auto beta_min  = ;
 
-        auto stoppind_tol = ;
-        auto residue   = 1.e10;
-
-        for(size_t iter = 0; iter < MAX_RESTARTS; iter++)
-        {
-
-            test_plasticity();
-
-        }
-    }
 };
 //#define DEBUG
 template<typename Parameters, typename MeshParameters, typename T>
@@ -954,7 +962,7 @@ read_parameters(const std::string& meshfilename,
 
         std::regex type_regex2;
         std::cout << "directory : "<< directory << std::endl;
-        std::regex base_regex2(directory +"/amesh+\\_([0-9]+)\\_+(.*)");
+        std::regex base_regex2(directory +"/amesh+\\_([0-9]+)\\_+(.*)\\_" + mp.short_mesh_name + "\\.typ1$");
 
         std::smatch  match2;
         auto  match_found2 = std::regex_match(piece[0], match2, base_regex2);
@@ -970,6 +978,7 @@ read_parameters(const std::string& meshfilename,
             }
             std::cout << "Old_mesh : "<< std::stoi(piece2[1])  << std::endl;
             mp.initial_imsh = std::stoi(piece2[1]) + 1;
+            mp.summary_old  = "_" + piece2[2];
             std::cout << "Taking "<< mp.initial_imsh<<" adaptive mesh as the initial one." << std::endl;
             if(mp.initial_imsh ==0)
                 throw std::invalid_argument("Don't load data from step 0 (rm_0). Use higher adaptive steps.");

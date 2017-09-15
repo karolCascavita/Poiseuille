@@ -21,88 +21,312 @@
 #include "common/eigen.hpp"
 #include "bases/bases_utils.hpp"
 #include "bases/bases_ranges.hpp"
-
+#include "../plasticity/qps_ranges.hpp"
+#include "plasticity.hpp"
 namespace disk {
 
-template<typename T>
-struct plasticity_data
+template<typename MeshType>
+class punctual_tensor;
+
+template<typename T, typename Storage>
+class punctual_tensor<disk::mesh<T,2,Storage>>
 {
-    plasticity_data(): Lref(1.), Vref(1.), Bn(0.), mu(1.), alpha(1.), betha(1.), f(1.),
-                        method(false), hho(2)
-    {}
-    T f;                    //WK: Cuidado porque f deberia ser el valor externo de la fuente.
-    T Lref;                 /* Charactetistic length */
-    T Vref;                 /* Reference velocity */
-    T Bn;                   /* Bingham number */
-    T mu;                   /* viscosity */
-    T alpha;
-    T betha;
-    T yield;
-    bool   method;
-    size_t hho;
+public:
+    typedef dynamic_matrix<T>                           matrix_type;
+    typedef disk::mesh<T,2,Storage>                     mesh_type;
+    typedef typename mesh_type::cell                    cell_type;
+    typedef typename mesh_type::face                    face_type;
+    typedef typename mesh_type::point_type              point_type;
+    typedef disk::quadrature<mesh_type, cell_type>      cell_quad_type;
+    typedef disk::quadrature<mesh_type, face_type>      face_quad_type;
+
+    matrix_type cell_quad_pts;
+    matrix_type face_quad_pts;
+    matrix_type grid_points;
+    matrix_type face_bars;
+    matrix_type cell_bar;
+    qpspace_ranges qsr;
+    size_t m_quad_degree;
+    size_t cell_qps_size;
+    size_t face_qps_size;
+    size_t grid_pts_size;
+
+    //WK: try to do this in the constructor.(I had problems in tensor_zero_vector,
+    // since it s asking for the input of the constructor)
+
+    punctual_tensor(){m_quad_degree = 10000; };
+    //Warning if m_quad-degree has not a value,  all others functions wont be ok
+    punctual_tensor(const mesh_type& msh, const cell_type& cl, const size_t& quad_degree):m_quad_degree(quad_degree)
+    {
+
+        auto cq  = cell_quad_type(m_quad_degree);
+        auto fq  = face_quad_type(m_quad_degree);
+        auto fcs = faces(msh, cl);
+        auto num_fcs =  number_of_faces(msh, cl);
+
+        auto num_face_qps = fq.integrate(msh, fcs[0]).size();
+        auto num_cell_qps = cq.integrate(msh, cl).size();
+
+        qsr = qpspace_ranges(num_cell_qps, num_face_qps, num_fcs);
+
+        cell_qps_size = qsr.cell_range().size();
+        face_qps_size = qsr.all_faces_range().size();
+        grid_pts_size = num_fcs;
+    };
+
+    size_t cell_qps_cols(){   return cell_qps_size;}
+    size_t face_qps_cols(){   return face_qps_size;}
+    size_t grid_pts_cols(){   return grid_pts_size;}
+    size_t facebars_cols(){   return grid_pts_size;}
+    size_t cols(){ return   cell_qps_size + face_qps_size + 2 * grid_pts_size + 1;}
+
+    void
+    Zero(const size_t rows)
+    {
+        if(m_quad_degree >= 100 )
+            throw std::logic_error("m_quad_degree >100, it has not been defined or it is taking impossible values");
+
+        //std::cout << "ZERO QUAD DEGREE :"<< quad_degree << std::endl;
+        cell_quad_pts = matrix_type::Zero(rows, cell_qps_size);
+        face_quad_pts = matrix_type::Zero(rows, face_qps_size);
+        grid_points   = matrix_type::Zero(rows, grid_pts_size);
+        face_bars = matrix_type::Zero(rows, grid_pts_size);
+        cell_bar  = matrix_type::Zero(rows, 1);
+        return;
+    }
+
+    matrix_type cell_qp_matrix() { return cell_quad_pts; }
+    matrix_type face_qp_matrix() { return face_quad_pts; }
+    matrix_type grid_pt_matrix() { return grid_points; }
+    matrix_type facebar_matrix() { return face_bars; }
+    matrix_type cellbar_matrix() { return face_bars; }
+
+    matrix_type
+    join_all()
+    {
+
+        if(m_quad_degree >= 100 )
+            throw std::logic_error("m_quad_degree >100, it has not been defined or it is taking impossible values");
+
+        size_t cols = cell_quad_pts.cols() + face_quad_pts.cols() + grid_points.cols()
+                        + face_bars.cols() + 1;
+
+        auto fqs_size = face_quad_pts.cols();
+        auto offset_fqs      = cell_quad_pts.cols();
+        auto offset_vertex   = cell_quad_pts.cols() + fqs_size;
+        auto offset_face_bar = offset_vertex   + grid_points.cols();
+        auto offset_cell_bar = offset_face_bar + grid_points.cols();
+
+        assert(cell_quad_pts.rows() == face_quad_pts.rows());
+        assert(cell_quad_pts.rows() == grid_points.rows());
+        assert(face_bars.rows() == grid_points.rows());
+        assert(face_bars.rows() == cell_bar.rows());
+
+        auto rows = cell_quad_pts.rows();
+        matrix_type  ret = matrix_type::Zero(rows, cols);
+        ret.block(0, 0, rows, offset_fqs)        = cell_quad_pts;
+        ret.block(0, offset_fqs, rows, fqs_size) = face_quad_pts;
+        ret.block(0, offset_vertex,   rows, grid_points.cols()) = grid_points;
+        ret.block(0, offset_face_bar, rows, grid_points.cols()) = face_bars;
+        ret.block(0, offset_cell_bar, rows, 1)   = cell_bar;
+        return ret;
+    }
+    void
+    split_all(const matrix_type &mat, const size_t& rows)
+    {
+        if(m_quad_degree >= 100 )
+            throw std::logic_error("m_quad_degree >10E5, it has not been defined or it is taking impossible values");
+
+        Zero(rows);
+
+        auto offset_fqs      = cell_qps_size;
+        auto offset_vertex   = offset_fqs + face_qps_size;
+        auto offset_face_bar = offset_vertex   + grid_pts_size;
+        auto offset_cell_bar = offset_face_bar + grid_pts_size;
+
+        cell_quad_pts = mat.block(0, 0, rows, offset_fqs);
+        face_quad_pts = mat.block(0, offset_fqs, rows, face_qps_size);
+        grid_points   = mat.block(0, offset_vertex,   rows, grid_pts_size);
+        face_bars     = mat.block(0, offset_face_bar, rows, grid_pts_size);
+        cell_bar      = mat.block(0, offset_cell_bar, rows, 1);
+
+        assert(cell_quad_pts.rows() == face_quad_pts.rows());
+        assert(cell_quad_pts.rows() == grid_points.rows());
+        assert(face_bars.rows() == grid_points.rows());
+        assert(face_bars.rows() == cell_bar.rows());
+
+        //m_quad_degree = tsr.sigma.m_quad_degree;
+        return;
+    }
+    friend punctual_tensor<mesh_type> operator-(const punctual_tensor< mesh_type>& tp1,
+                                                const punctual_tensor< mesh_type>& tp2)
+    {
+        punctual_tensor<mesh_type> ret;
+        if(tp1.m_quad_degree != tp2.m_quad_degree)
+            throw std::logic_error("(quad_degree) is different for these tensors, so it is not possible to do (-)operation.");
+        ret.m_quad_degree = tp1.m_quad_degree;
+        ret.cell_quad_pts = tp1.cell_quad_pts - tp2.cell_quad_pts;
+        ret.face_quad_pts = tp1.face_quad_pts - tp2.face_quad_pts;
+        ret.face_bars = tp1.face_bars - tp2.face_bars;
+        ret.cell_bar  = tp1.cell_bar  - tp2.cell_bar;
+        ret.grid_points  = tp1.grid_points - tp2.grid_points;
+
+        ret.cell_qps_size = ret.cell_quad_pts.cols();
+        ret.face_qps_size = ret.face_quad_pts.cols();
+        ret.grid_pts_size = ret.grid_points.cols();
+
+        return ret;
+    }
+    friend punctual_tensor<mesh_type> operator+(const punctual_tensor<mesh_type>& tp1,
+                                               const punctual_tensor<mesh_type>& tp2)
+    {
+        if(tp1.m_quad_degree != tp2.m_quad_degree)
+            throw std::logic_error("(quad_degree) is different for these tensors, so it is not possible to do (+)operation.");
+
+        punctual_tensor<mesh_type> ret;
+        ret.m_quad_degree = tp1.m_quad_degree;
+
+        ret.cell_quad_pts = tp1.cell_quad_pts + tp2.cell_quad_pts;
+        ret.face_quad_pts = tp1.face_quad_pts + tp2.face_quad_pts;
+        ret.face_bars = tp1.face_bars + tp2.face_bars;
+        ret.cell_bar  = tp1.cell_bar  + tp2.cell_bar;
+        ret.grid_points  = tp1.grid_points  + tp2.grid_points;
+
+        ret.cell_qps_size = ret.cell_quad_pts.cols();
+        ret.face_qps_size = ret.face_quad_pts.cols();
+        ret.grid_pts_size = ret.grid_points.cols();
+        return ret;
+    }
+    friend punctual_tensor<mesh_type> operator*(const T& scalar, const punctual_tensor<mesh_type>& tp)
+    {
+        punctual_tensor<mesh_type> ret;
+        ret.m_quad_degree = tp.m_quad_degree;
+        ret.cell_quad_pts = scalar * tp.cell_quad_pts;
+        ret.face_quad_pts = scalar * tp.face_quad_pts;
+        ret.face_bars     = scalar * tp.face_bars;
+        ret.cell_bar      = scalar * tp.cell_bar;
+        ret.grid_points      = scalar * tp.grid_points;
+
+        ret.cell_qps_size = ret.cell_quad_pts.cols();
+        ret.face_qps_size = ret.face_quad_pts.cols();
+        ret.grid_pts_size = ret.grid_points.cols();
+
+        return ret;
+    }
+
+    friend std::ostream& operator<<(std::ostream& os, const punctual_tensor<mesh_type>& tp){
+        os << "* m_quad_degree : "<< tp.m_quad_degree<<std::endl;
+        os << "* cell_quad_pts : size = "<< tp.cell_quad_pts.rows()<< "x";
+        os <<  tp.cell_qps_cols()<< std::endl;
+        for(size_t j = 0 ; j < tp.cell_quad_pts.rows(); j++)
+        {
+            for(size_t i = 0 ; i < tp.cell_qps_cols(); i++)
+                    os << tp.cell_quad_pts(i,j) << "  ";
+            os <<std::endl;
+        }
+        os << "* face_quad_pts : size = "<< tp.face_quad_pts.rows();
+        os << "x"<<  tp.face_qps_cols()<< std::endl;
+        for(size_t j = 0 ; j < tp.face_quad_pts.rows(); j++)
+        {
+            for(size_t i = 0 ; i < tp.face_qps_cols(); i++)
+                    os << tp.face_quad_pts(i,j) << "  ";
+            os <<std::endl;
+        }
+
+        os << "* face_bar : size = "<< tp.face_bars.rows();
+        os << "x"<<  tp.facebars_cols()<< std::endl;
+        for(size_t j = 0 ; j < tp.face_quad_pts.rows(); j++)
+        {
+            for(size_t i = 0 ; i < tp.facebars_cols(); i++)
+                    os << tp.face_quad_pts(i,j) << "  ";
+            os <<std::endl;
+        }
+
+        os << "* vertices : size = "<< tp.grid_points.rows();
+        os << "x"<<  tp.grid_pts_cols()<< std::endl;
+        for(size_t j = 0 ; j < tp.grid_points.rows(); j++)
+        {
+            for(size_t i = 0 ; i < tp.grid_pts_cols(); i++)
+                    os << tp.grid_points(i,j) << "  ";
+            os <<std::endl;
+        }
+        os << "* cell_bar : size = "<< tp.cell_bar.rows();
+        os << "x"<<  tp.cell_bar.cols()<< std::endl;
+        for(size_t j = 0 ; j < tp.cell_bar.rows(); j++)
+        {
+            for(size_t i = 0 ; i < tp.cell_bar.cols(); i++)
+                    os << tp.cell_bar(i,j) << "  ";
+            os <<std::endl;
+        }
+
+        return os;
+    }
+
+    std::vector<point_type>
+    tensor_points(const mesh_type& msh,
+                  const cell_type& cell)
+    {
+        auto cq  = cell_quad_type(m_quad_degree);
+        auto fq  = face_quad_type(m_quad_degree);
+        auto cqs = cq.integrate(msh, cell);
+        auto fcs = faces(msh, cell);
+        auto pts = points(msh, cell);
+        auto total_size = cell_qps_size + face_qps_size + 2 * grid_pts_size + 1;
+        auto ret = std::vector<point_type>(total_size);
+
+        size_t cont = 0;
+        for(auto& cq : cqs)
+            ret.at(cont++) = cq.point();
+
+        for(auto& fc :fcs)
+        {
+            auto fqs = fq.integrate(msh, fc);
+            for(auto& fq : fqs)
+                ret.at(cont++) = fq.point();
+        }
+
+        for(auto& p : pts)
+            ret.at(cont++) = p;
+
+        for(auto& fc :fcs)
+            ret.at(cont++) = barycenter(msh, fc);
+
+        ret.at(cont) = barycenter(msh, cell);
+
+        return ret;
+    }
 };
 
-
-template<typename T>
+template<typename MeshType>
 struct tensors
 {
 public:
-    typedef Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>     tensor_matrix;
-    tensor_matrix      siglam, gamma, xi_norm;
-    size_t quad_degree;
+    typedef typename MeshType::scalar_type      scalar_type;
+    typedef typename MeshType::cell             cell_type;
+    typedef Eigen::Matrix<scalar_type, Eigen::Dynamic, Eigen::Dynamic> tensor_matrix;
+
+    punctual_tensor<MeshType>   sigma;
+    punctual_tensor<MeshType>   gamma;
+    punctual_tensor<MeshType>   xi_norm;
 
     tensors() //quad_degree(2*degree+2)
     {}
 
     void
     set_quad_degree(const size_t& degree)
-    {
-    }
+    {}
+
     void
-    Zero(const size_t cols)
+    zero_tensor(const MeshType& msh, const cell_type& cl, const size_t& degree)
     {
-        auto siglam   = tensor_matrix::Zero(2, cols);
-        auto gamma    = tensor_matrix::Zero(2, cols);
-        auto xi_norm  = tensor_matrix::Zero(1, cols);
-    }
-    template< typename MeshType>
-    void
-    zero_tensor(const MeshType& msh, const typename MeshType::cell& cl, const size_t& degree)
-    {
-        typedef MeshType                                    mesh_type;
-        typedef typename MeshType::cell                     cell_type;
-        typedef typename MeshType::face                     face_type;
-        typedef disk::quadrature<mesh_type, cell_type>      cell_quad_type;
-        typedef disk::quadrature<mesh_type, face_type>      face_quad_type;
+        sigma   = punctual_tensor<MeshType>(msh, cl, 2 * degree + 2);
+        gamma   = punctual_tensor<MeshType>(msh, cl, 2 * degree + 2);
+        xi_norm = punctual_tensor<MeshType>(msh, cl, 2 * degree + 2);
 
-        //WK: try to do this in the constructor.(I had problems in tensor_zero_vector, since it s asking for the input of the constructor)
-        quad_degree = 2 * degree + 2;
-        //std::cout << "ZERO QUAD DEGREE :"<< quad_degree << std::endl;
+        sigma.Zero( 2);
+        gamma.Zero( 2);
+        xi_norm.Zero(1);
 
-        auto DIM = MeshType::dimension;
-        auto cq  = cell_quad_type(quad_degree);
-        auto fq  = face_quad_type(quad_degree);
-
-        auto fcs = faces(msh, cl);
-        auto num_faces = fcs.size();
-        auto fqsz = num_faces * fq.integrate(msh, fcs[0]).size(); //WK: This should change if k different for each face
-        auto cqsz = cq.integrate(msh, cl).size();
-
-
-        //#if 0
-        auto cols = cqsz + fqsz + 2 * num_faces + 1;
-        siglam   = tensor_matrix::Zero(DIM, cols);
-        gamma    = tensor_matrix::Zero(DIM, cols);
-        xi_norm  = tensor_matrix::Zero(1  , cols);
-
-
-        //#endif
-        #if 0
-        siglam   = tensor_matrix::Zero(DIM, cqs + ps );
-        gamma    = tensor_matrix::Zero(DIM, cqs + ps );
-        xi_norm  = tensor_matrix::Zero(1  , cqs + ps );
-        #endif
-        T a;
         #if 0
         std::cout << " SIZE SIGMA POINTS ("<< cl.get_id()<<") : "<< cols << std::endl;
 
@@ -142,16 +366,17 @@ public:
 };
 
 template<typename T, size_t DIM, typename Storage>
-std::vector<tensors<T>>
+std::vector<tensors< mesh<T,DIM,Storage> >>
 tensor_zero_vector(const mesh<T,DIM,Storage>& msh, const size_t& degree)
 {
+    typedef   mesh<T,DIM,Storage> mesh_type;
     // WK: degree of quadrature assumed as for (Dru,Dru)
-    auto    vec = std::vector<tensors<T>>(msh.cells_size());
+    auto    vec = std::vector<tensors<mesh_type>>(msh.cells_size());
 
     for (auto& cl : msh)
     {
         auto  id = cl.get_id();
-        tensors<T>  tsr;
+        tensors<mesh_type>  tsr;
         tsr.zero_tensor(msh, cl, degree);
         vec.at(id)   =  tsr;
     }
@@ -332,6 +557,8 @@ public:
     matrix_type
     compute(const mesh_type& msh, const cell_type& cl, const matrix_type& gradrec_oper)
     {
+        auto pts = points(msh,cl);
+
         matrix_type mass_mat = matrix_type::Zero(cell_basis.size(), cell_basis.size());
 
         auto cell_quadpoints = cell_quadrature.integrate(msh, cl);
@@ -372,7 +599,9 @@ public:
         {
             auto current_face_range = dsr.face_range(face_i);
             auto fbs = current_face_range.size();
-            auto h = diameter(msh, /*fcs[face_i]*/cl);
+            auto vts = msh.get_vertices(cl, pts);
+            //auto h = diameter(msh, /*fcs[face_i]*/cl);
+            auto h = diameter(msh, /*fcs[face_i]*/vts);
             auto fc = fcs[face_i];
 
             matrix_type face_mass_matrix    = matrix_type::Zero(fbs, fbs);
@@ -493,6 +722,15 @@ public:
 
         return AC;
     }
+
+    #if 0
+    vector_type
+    plasticity_rhs(const mesh_type& msh,
+                    );
+    {
+
+    }
+    #endif
     vector_type
     compute_rhs(const mesh_type& msh, const cell_type& cl,
             const matrix_type& local_mat,
@@ -553,6 +791,7 @@ public:
 
         vector_type solT = K_TT.llt().solve(cell_rhs - bP_T - K_TF*solF);
 
+        assert(cell_size + all_faces_size == dsr.total_size() );
         ret.head(cell_size)         = solT;
         ret.tail(all_faces_size)    = solF;
 
@@ -651,9 +890,7 @@ public:
         for (size_t i = 0; i < lc.rows(); i++)
         {
             for (size_t j = 0; j < lc.cols(); j++)
-            {
                 m_triplets.push_back( triplet_type( l2g.at(i), l2g.at(j), lc(i,j) ) );
-            }
         }
     }
     template<typename LocalContrib>
@@ -685,7 +922,7 @@ public:
     }
 
     void
-    impose_boundary_conditions_lhs(const mesh_type& msh)
+    impose_boundary_conditions_lhs( mesh_type& msh)
     {
         size_t fbs = face_basis.size();
         size_t face_i = 0;
@@ -732,7 +969,7 @@ public:
     }
     template<typename Function>
     void
-    impose_boundary_conditions_rhs(const mesh_type& msh, const Function& bc)
+    impose_boundary_conditions_rhs(mesh_type& msh, const Function& bc)
     {
         //std::cout << "Imposing_boundary_conditions_rhs" << std::endl;
         size_t fbs = face_basis.size();
@@ -1031,7 +1268,7 @@ make_gradient_matrix(const std::vector<T>& dphi)
 }
 template<typename T, int DIM>
 T
-make_prod_stress_n(const  dynamic_vector<T>& st, const static_vector<T,DIM>& n )
+make_prod(const  dynamic_vector<T>& st, const static_vector<T,DIM>& n )
 {
     T p1(0.);
     //for(size_t i = 0; i < mesh_type::dimension; i++)
@@ -1041,13 +1278,32 @@ make_prod_stress_n(const  dynamic_vector<T>& st, const static_vector<T,DIM>& n )
 }
 template<typename T>
 T
-make_prod_stress_n(const  dynamic_vector<T>& st, const T& n )
+make_prod(const  dynamic_vector<T>& st, const T& n )
 {
     std::cout << "******************** THIS IS ONLY FOR 1D ********************" << std::endl;
     std::cout << "******************** THIS IS ONLY FOR 1D ********************" << std::endl;
     std::cout << "******************** THIS IS ONLY FOR 1D ********************" << std::endl;
 
     return  st(0) * n;
+}
+
+template<typename T, typename MeshType, typename CellType, typename CellBasisType>
+dynamic_vector<T>
+nabla_ruh_at_point( const point<T,2>& pt, //Check for this to be generalized to other dimensions.
+               const MeshType&  msh,
+               const CellType&  cl,
+               const CellBasisType& cell_basis,
+               const dynamic_vector<T>& ruh,
+               const size_t m_degree)
+{
+    auto col_range      = cell_basis.range(1,m_degree+1);
+    auto row_range      = disk::dof_range(0,MeshType::dimension);
+
+    auto dphi   = cell_basis.eval_gradients(msh, cl, pt);
+    dynamic_matrix<T> dphi_matrix = make_gradient_matrix(dphi);
+    dynamic_matrix<T> dphi_taken  = take(dphi_matrix, row_range, col_range);
+    dynamic_vector<T> dphi_ruh    = dphi_taken * ruh;
+    return dphi_ruh;
 }
 
 template<typename T,typename Mesh,typename CellBasisType, typename CellQuadType,
@@ -1069,17 +1325,14 @@ class plasticity
     typedef static_vector<T, mesh_type::dimension>   m_static_vector;
     typedef typename CellBasisType::gradient_value_type gradient_value_type_pr;
 
-    cell_basis_type                             cell_basis;
-    cell_quadrature_type                        cell_quadrature;
+    cell_basis_type                         cell_basis;
+    cell_quadrature_type                    cell_quadrature;
 
-    face_basis_type                             face_basis;
-    face_quadrature_type                        face_quadrature;
+    face_basis_type                         face_basis;
+    face_quadrature_type                    face_quadrature;
 
     size_t                                  m_quad_degree;
     size_t                                  m_degree;
-    size_t                                  m_hho;
-    T                                       m_yield;
-    T                                       m_alpha;
     T                                       m_method_coef;
 public:
     //vector_type     rhs;
@@ -1087,11 +1340,10 @@ public:
     //plasticity()                = delete;
     plasticity()
     {}
-    plasticity(const size_t& degree, const size_t& quad_degree,
-                                    const plasticity_data<T>& pst)
+    plasticity(const size_t& degree, const size_t& quad_degree)
+
     //WK: for mu as tensor one should check this part
-        : m_degree(degree), m_alpha(pst.alpha), m_yield(pst.yield), m_quad_degree(quad_degree),
-            m_hho(pst.hho)
+        : m_degree(degree), m_quad_degree(quad_degree)
     {
 
         cell_basis  =  cell_basis_type(m_degree + 1); // This is k + 1  just if I want to use \nabla r^{k + 1}
@@ -1100,31 +1352,110 @@ public:
         cell_quadrature     = cell_quadrature_type(m_quad_degree);
         face_quadrature     = face_quadrature_type(m_quad_degree);
 
-        if(pst.method == true)
-            m_method_coef = 1. / m_alpha ;
-        else
-            m_method_coef = 1. / (m_alpha + pst.mu);
     }
 
+    std::pair< vector_type,T>
+    eval_plasticity(const point<T,2> & pt,
+                  const mesh_type    & msh,
+                  const cell_type    & cl,
+                  const vector_type  & ruh,
+                  const vector_type  & uh_T,
+                  const plasticity_data<T> & pst,
+                  vector_type     & sigma)
+    {
+        auto dphi   = cell_basis.eval_gradients(msh, cl, pt);
+
+        auto cell_range = cell_basis.range(0,m_degree);
+        auto col_range  = cell_basis.range(1,m_degree + 1);
+        auto row_range  = disk::dof_range(0,mesh_type::dimension);
+
+        matrix_type dphi_matrix = make_gradient_matrix(dphi);
+        matrix_type dphi_taken  = take(dphi_matrix, row_range, col_range);
+        vector_type dphi_ruh    = dphi_taken * ruh;
+
+        vector_type xi =  vector_type::Zero(mesh_type::dimension);
+        if(pst.hho == 1)
+             xi = sigma  +  pst.alpha * dphi_ruh;
+        if(pst.hho == 2)
+        {
+            matrix_type dphi_  = take(dphi_matrix, row_range, cell_range);
+            xi = sigma  +  pst.alpha * dphi_* uh_T;
+        }
+
+        auto xi_norm = xi.norm();
+
+        vector_type gamma = vector_type::Zero(mesh_type::dimension);
+        if(xi_norm > pst.yield)
+            gamma = m_method_coef * (xi_norm - pst.yield) * (xi / xi_norm);
+
+        sigma += pst.alpha * ( dphi_ruh - gamma );
+
+        return std::make_pair(gamma, xi_norm);
+    }
+
+    void
+    compute_other(const mesh_type& msh,
+                 const cell_type& cl,
+                 const vector_type& ruh,
+                 const vector_type  & uh_T,
+                 const plasticity_data<T>& pst,
+                 tensors<mesh_type> & tsr)
+    {
+        auto fcs = faces(msh, cl);
+        auto pts = points(msh, cl);
+        // Values at the vertices
+        for(size_t i = 0;  i < fcs.size(); i++)
+        {
+            vector_type v_sigma = tsr.sigma.grid_points.col(i);
+            auto pair  =  eval_plasticity(pts.at(i), msh, cl, ruh, uh_T,pst, v_sigma);
+
+            tsr.sigma.grid_points.col(i) = v_sigma;
+            tsr.gamma.grid_points.col(i) = pair.first;
+            tsr.xi_norm.grid_points(i)   = pair.second;
+        }
+
+        // Values at the barycenter of the faces
+        for(size_t i = 0; i < pts.size(); i++)
+        {
+            auto face  = fcs.at(i);
+            auto fbar  = barycenter(msh, face);
+
+            vector_type fb_sigma = tsr.sigma.face_bars.col(i);
+            auto pair  = eval_plasticity(fbar, msh, cl, ruh, uh_T,pst, fb_sigma);
+
+            tsr.sigma.face_bars.col(i)  = fb_sigma;
+            tsr.gamma.face_bars.col(i)  = pair.first;
+            tsr.xi_norm.face_bars(i)    = pair.second;
+        }
+
+        // Values at the barycenter of the cell
+        vector_type cb_sigma = tsr.sigma.cell_bar;
+        auto cbar  =  barycenter(msh, cl);
+        auto pair  =  eval_plasticity(cbar, msh, cl, ruh, uh_T, pst, cb_sigma);
+
+        tsr.sigma.cell_bar   = cb_sigma;
+        tsr.gamma.cell_bar   = pair.first;
+        tsr.xi_norm.cell_bar(0) = pair.second;
+
+        return;
+    }
 
     vector_type
     compute(const mesh_type& msh,
                  const cell_type& cl,
                  const matrix_type& rec_oper,
                  const vector_type& uh_TF,
-                 tensors<T> & tsr)
+                 const plasticity_data<T>& pst,
+                 tensors<mesh_type> & tsr)
     {
-        //std::cout << "/**********   CELL = "<<msh.lookup(cl)<<"*********/" << std::endl;
+        if(pst.method == true)
+            m_method_coef = 1. / pst.alpha ;
+        else
+            m_method_coef = 1. / (pst.alpha + pst.mu);
+
         //WK: for p-adaptation quad_degree is not the same for all cells
-
-
-        timecounter tc;
-
-        std::map<std::string, double> timings, timings2, timings1;
-
-        tc.tic();
-
         auto fcs = faces(msh, cl);
+
         auto num_faces      = fcs.size();
         auto cell_range     = cell_basis.range(0,m_degree);
         auto col_range      = cell_basis.range(1,m_degree+1);
@@ -1132,401 +1463,219 @@ public:
         auto num_cell_dofs  = cell_range.size();
         auto num_face_dofs  = face_basis.size();
         dofspace_ranges    dsr(num_cell_dofs, num_face_dofs, num_faces);
-        matrix_type    ruh  = rec_oper * uh_TF;
+
+        vector_type    uh_T = uh_TF.head(num_cell_dofs);
+        vector_type    ruh  = rec_oper * uh_TF;
         vector_type    rhs  = vector_type::Zero(dsr.total_size());
-        vector_type    rhs_c  = vector_type::Zero(num_cell_dofs);
-        size_t cont  =  0;
+
         auto   cqs   =  cell_quadrature.integrate(msh, cl);
+        size_t cont  =  0;
 
         for (auto& qp : cqs)
         {
-            timecounter tc_detail;
-            tc_detail.tic();
-
-            auto dphi       =   cell_basis.eval_gradients(msh, cl, qp.point());
-            matrix_type dphi_matrix =   make_gradient_matrix(dphi);
-            matrix_type dphi_taken  =   take(dphi_matrix, row_range, col_range);
-            vector_type dphi_ruh    =   dphi_taken * ruh;
-            matrix_type dphi_rec    =   dphi_taken * rec_oper;
-
-            vector_type  xi    =  tsr.siglam.col(cont)  +  m_alpha * dphi_ruh;
-            auto xi_norm = xi.norm();
-
-            vector_type  gamma =  vector_type::Zero(mesh_type::dimension);
-
-            if(xi_norm > m_yield)
-                gamma   = m_method_coef * (xi_norm - m_yield) * (xi / xi_norm);
-
-            tsr.siglam.col(cont) +=  m_alpha * ( dphi_ruh - gamma );
-            tsr.gamma.col(cont)   =  gamma;
-            tsr.xi_norm(cont)     =  xi_norm;
+            if(cont > cqs.size())
+                throw std::logic_error("Wrong access to columns");
+            vector_type sigma =  tsr.sigma.cell_quad_pts.col(cont);
+            auto pair  =  eval_plasticity(qp.point(), msh, cl, ruh, uh_T, pst, sigma);
+            vector_type gamma = pair.first;
+            tsr.sigma.cell_quad_pts.col(cont)   =  sigma;
+            tsr.gamma.cell_quad_pts.col(cont)   =  gamma;
+            tsr.xi_norm.cell_quad_pts(cont) =  pair.second;
 
             //( Dv_T, sigma - alpha* gamma)_T
-            if(m_hho == 2)
+            auto dphi   = cell_basis.eval_gradients(msh, cl, qp.point());
+            matrix_type   dphi_matrix = make_gradient_matrix(dphi);
+
+            if(pst.hho == 2)
             {
-                matrix_type dphi_    = take(dphi_matrix, row_range, cell_range);
-                //rhs_c += qp.weight() * dphi_.transpose() * (tsr.siglam.col(cont) - m_alpha * gamma) ;
-                //rhs += qp.weight() * dphi_.transpose() * (tsr.siglam.col(cont) - m_alpha * gamma) ;
-                rhs.head(num_cell_dofs)  += qp.weight() * dphi_.transpose() * (tsr.siglam.col(cont) - m_alpha * gamma) ;
+                matrix_type dphi_  = take(dphi_matrix, row_range, cell_range);
+                rhs.head(num_cell_dofs)  += qp.weight() * dphi_.transpose() *
+                                                    (sigma - pst.alpha * gamma);
             }
-            else if(m_hho ==  1)
-                rhs  += qp.weight() * dphi_rec.transpose() * (tsr.siglam.col(cont) - m_alpha * gamma) ;
+            else if(pst.hho ==  1)
+            {
+                matrix_type dphi_taken  = take(dphi_matrix, row_range, col_range);
+                matrix_type dphi_rec = dphi_taken * rec_oper;
+                rhs  += qp.weight() * dphi_rec.transpose() * (sigma - pst.alpha * gamma);
+            }
             else
                 throw std::invalid_argument("Invalid discretization name for the plasticity term. Review the name in parametes.txt or pst.hho");
 
             ++cont;
         }
 
-        size_t face_basis_offset = num_cell_dofs;
-        size_t offset    = cqs.size();
-        //#if 0
         // Boundary term
+        size_t fcont = 0;
         for (size_t face_i = 0; face_i < num_faces; face_i++)
         {
             auto current_face_range = dsr.face_range(face_i);
             auto fc   = fcs.at(face_i);
             auto fqs  = face_quadrature.integrate(msh, fc);
 
-            //#if 0
-            auto n = normal(msh, cl, fc);
-            vector_type    rhs_f  = vector_type::Zero(face_basis.size());
+            static_vector<T,2> n = normal(msh, cl, fc);
 
             for (auto& qp : fqs)
             {
+                vector_type f_sigma =  tsr.sigma.face_quad_pts.col(fcont);
+                auto pair  =  eval_plasticity(qp.point(), msh, cl, ruh, uh_T, pst, f_sigma);
+                vector_type f_gamma  = pair.first;
+
+                tsr.sigma.face_quad_pts.col(fcont)  = f_sigma;
+                tsr.gamma.face_quad_pts.col(fcont)  = f_gamma;
+                tsr.xi_norm.face_quad_pts(fcont)    = pair.second;
+
+                assert( fcont < tsr.sigma.face_qps_cols() );
+                assert( fcont < tsr.gamma.face_qps_cols() );
+                assert( fcont < tsr.xi_norm.face_qps_cols() );
+
                 auto f_phi  = face_basis.eval_functions(msh, fc, qp.point());
                 auto c_phi  = cell_basis.eval_functions(msh, cl, qp.point());
-                auto c_dphi = cell_basis.eval_gradients(msh, cl, qp.point());
-
-                matrix_type c_dphi_matrix =   make_gradient_matrix(c_dphi);
-                matrix_type c_dphi_taken  =   take(c_dphi_matrix, row_range, col_range);
-                vector_type c_dphi_ruh    =   c_dphi_taken * ruh;
-
-                // xi = sigma + alpha *Dr(u)
-                vector_type  xi    =  tsr.siglam.col(cont)  +  m_alpha * c_dphi_ruh;
-                auto xi_norm = xi.norm();
-
-                vector_type  gamma =  vector_type::Zero(mesh_type::dimension);
-                if(xi_norm > m_yield)
-                    gamma  = m_method_coef * (xi_norm - m_yield)* (xi / xi_norm);
-
-                tsr.siglam.col(cont) += m_alpha * ( c_dphi_ruh - gamma );
-                tsr.gamma.col(cont)   = gamma;
-                tsr.xi_norm(cont)     = xi_norm;
 
                 // ((sigma - alpha*gamma) * n
-                vector_type str =  tsr.siglam.col(cont) - m_alpha * gamma;
-                scalar_type p1  =  make_prod_stress_n( str , n);
-                if(m_hho == 2)
+                vector_type sigma_agamma =  f_sigma - pst.alpha * f_gamma;
+                scalar_type p1  = make_prod( sigma_agamma, n);
+                if(pst.hho == 2)
                 {
                     // ( (sigma - alpha*gamma) * n, vT )_F
                     for (size_t i = 0; i < num_cell_dofs; i++)
-                        rhs(i)   -= qp.weight() * p1 * c_phi.at(i) ;
+                        rhs(i)   -= qp.weight() * p1 * c_phi.at(i);
 
                     // ( (sigma - alpha*gamma) * n, vF )_F
-                    for (size_t i = 0, ii = current_face_range.min(); i < current_face_range.size(); i++, ii++)
+                    for (size_t i = 0, ii = current_face_range.min();
+                                        i < current_face_range.size(); i++, ii++)
                         rhs(ii)  += qp.weight() * p1 * f_phi.at(i);
-                    #if 0
-                    // ( (sigma - alpha*gamma) * n, vT )_F
-                    for (size_t i = 0; i < num_cell_dofs; i++)
-                        rhs_c(i)   -= qp.weight() * p1 * c_phi.at(i) ;
-
-                    // ( (sigma - alpha*gamma) * n, vF )_F
-                    for (size_t i = 0; i < num_face_dofs; i++)
-                        rhs_f(i)  += qp.weight() * p1 * f_phi.at(i);
-                    #endif
                 }
-                ++cont;
+                ++fcont;
             }
-
-            //rhs.block(face_basis_offset, 0, num_face_dofs,1) = rhs_f;
-            face_basis_offset += num_face_dofs;
-            //#endif
-            offset   += fqs.size();
         }
 
-        //rhs.block(0, 0, num_cell_dofs,1) = rhs_c;
+        compute_other(msh, cl, ruh, uh_T, pst, tsr);
 
-
-
-        //#endif
-
-        //#if 0
-
-        // tensor values in vertices
-        auto pts = points(msh,cl);
-
-
-        if(offset != cont)
-            throw std::invalid_argument("Invalid indices in storing values at Gauss points");
-
-        // Value at the vertices
-        for(size_t i = 0, j = offset; i < pts.size(); i++, j++)
-        {
-            //std::cout << "j = "<< j<< std::endl;
-            auto dphi   = cell_basis.eval_gradients(msh, cl, pts.at(i));
-            matrix_type dphi_matrix = make_gradient_matrix(dphi);
-            matrix_type dphi_taken  = take(dphi_matrix, row_range, col_range);
-            vector_type dphi_ruh    = dphi_taken * ruh;
-            vector_type xi = tsr.siglam.col(j)  +  m_alpha * dphi_ruh;
-            auto  xi_norm  = xi.norm();
-            vector_type gamma =   vector_type::Zero(mesh_type::dimension);
-
-            if(xi_norm > m_yield)
-                gamma = m_method_coef * (xi_norm - m_yield) * (xi / xi_norm);
-
-            tsr.siglam.col(j) += m_alpha * ( dphi_ruh - gamma );
-            tsr.gamma.col(j)   = gamma;
-            tsr.xi_norm(j)     = xi_norm;
-        }
-
-        // Value at the barycenter of the faces
-        offset += pts.size();
-        for(size_t i = 0, j = offset; i < num_faces; i++, j++)
-        {
-            //std::cout << "j = "<< j<< std::endl;
-            auto face   = fcs.at(i);
-            auto fbar   = barycenter(msh, face);
-            auto dphi   = cell_basis.eval_gradients(msh, cl, fbar);
-            matrix_type dphi_matrix = make_gradient_matrix(dphi);
-            matrix_type dphi_taken  = take(dphi_matrix, row_range, col_range);
-            vector_type dphi_ruh    = dphi_taken * ruh;
-            vector_type xi = tsr.siglam.col(j)  +  m_alpha * dphi_ruh;
-            auto  xi_norm  = xi.norm();
-            vector_type gamma =   vector_type::Zero(mesh_type::dimension);
-
-            if(xi_norm > m_yield)
-                gamma = m_method_coef * (xi_norm - m_yield) * (xi / xi_norm);
-
-            tsr.siglam.col(j) += m_alpha * ( dphi_ruh - gamma );
-            tsr.gamma.col(j)   = gamma;
-            tsr.xi_norm(j)     = xi_norm;
-        }
-
-        // Value at the barycenter of the cell
-        offset += num_faces;
-        auto cbar   = barycenter(msh, cl);
-        auto dphi   = cell_basis.eval_gradients(msh, cl, cbar);
-        matrix_type dphi_matrix = make_gradient_matrix(dphi);
-        matrix_type dphi_taken  = take(dphi_matrix, row_range, col_range);
-        vector_type dphi_ruh    = dphi_taken * ruh;
-        vector_type xi = tsr.siglam.col(offset)  +  m_alpha * dphi_ruh;
-        auto  xi_norm  = xi.norm();
-        vector_type gamma =   vector_type::Zero(mesh_type::dimension);
-
-        if(xi_norm > m_yield)
-            gamma = m_method_coef * (xi_norm - m_yield) * (xi / xi_norm);
-
-        tsr.siglam.col(offset) += m_alpha * ( dphi_ruh - gamma );
-        tsr.gamma.col(offset)   = gamma;
-        tsr.xi_norm(offset)     = xi_norm;
-
-        assert(offset + 1 == tsr.xi_norm.cols());
-
-        //#endif
         return rhs;
     }
 
-
-template< typename Solution>
-vector_type
-compute(const mesh_type& msh,
-             const cell_type& cl,
-             const matrix_type& rec_oper,
-             const vector_type& uh_TF,
-             const Solution& solution )
-{
-    // Diffusion
-
-    //std::cout << "/**********   CELL = "<<msh.lookup(cl)<<"*********/" << std::endl;
-    //WK: for p-adaptation quad_degree is not the same for all cells
-    timecounter tc;
-
-    std::map<std::string, double> timings, timings2, timings1;
-
-    tc.tic();
-
-    auto fcs = faces(msh, cl);
-    auto num_faces      = fcs.size();
-    auto cell_range     = cell_basis.range(0,m_degree);
-    auto col_range      = cell_basis.range(1,m_degree+1);
-    auto row_range      = disk::dof_range(0,mesh_type::dimension);
-    auto num_cell_dofs  = cell_range.size();
-    auto num_face_dofs  = face_basis.size();
-    dofspace_ranges    dsr(num_cell_dofs, num_face_dofs, num_faces);
-    matrix_type    ruh  = rec_oper * uh_TF;
-    vector_type    rhs_m1  = vector_type::Zero(dsr.total_size());
-    vector_type    rhs_m2  = vector_type::Zero(dsr.total_size());
-    vector_type    rhs_c  = vector_type::Zero(num_cell_dofs);
-    size_t cont   =  0;
-    auto   cqs    =  cell_quadrature.integrate(msh, cl);
-    auto   pts    =  points( msh , cl);
-
-
-    T x0 = 0.5;
-    size_t number = 0;
-    for(auto& p : pts)
+    template<typename Solution>
+    dynamic_vector<T>
+    compute(const mesh_type& msh,
+                 const cell_type& cl,
+                 const matrix_type& rec_oper,
+                 const vector_type& uh_TF,
+                 const plasticity_data<T>& pst,
+                 const Solution& solution )
     {
-        if(p.x() < x0)
-        number = 1;
-        if(p.x() > x0)
-        number = 2;
-    }
-    std::cout << "number( "<< cl.get_id()<<") = "<< number    << std::endl;
-    if(!(number ==2 || number ==1) )
-        throw std::invalid_argument("Invalid number domain.");
+        //WK: for p-adaptation quad_degree is not the same for all cells
+        auto fcs = faces(msh, cl);
 
-    for (auto& qp : cqs)
-    {
-        timecounter tc_detail;
-        tc_detail.tic();
+        auto num_faces      = fcs.size();
+        auto cell_range     = cell_basis.range(0,m_degree);
+        auto col_range      = cell_basis.range(1,m_degree+1);
+        auto row_range      = disk::dof_range(0,mesh_type::dimension);
+        auto num_cell_dofs  = cell_range.size();
+        auto num_face_dofs  = face_basis.size();
+        dofspace_ranges    dsr(num_cell_dofs, num_face_dofs, num_faces);
+        vector_type    uh_T = uh_TF.head(num_cell_dofs);
+        vector_type    ruh  = rec_oper * uh_TF;
+        vector_type    rhs  = vector_type::Zero(dsr.total_size());
 
-        auto dphi   =   cell_basis.eval_gradients(msh, cl, qp.point());
-        matrix_type dphi_matrix =   make_gradient_matrix(dphi);
-        matrix_type dphi_taken  =   take(dphi_matrix, row_range, col_range);
-        vector_type dphi_ruh    =   dphi_taken * ruh;
-        matrix_type dphi_rec    =   dphi_taken * rec_oper;
-
-        //( Dv_T, sigma - alpha* gamma)_T
-        if(m_hho == 2)
+        auto cqs  =  cell_quadrature.integrate(msh, cl);
+        auto number = set_cell_number(msh, cl);
+        size_t cont  =  0;
+        for (auto& qp : cqs)
         {
-            matrix_type dphi_    = take(dphi_matrix, row_range, cell_range);
-            rhs_c.head(num_cell_dofs)  += qp.weight() * dphi_.transpose() * solution.st( qp.point(), number);
-        }
-        else if(m_hho == 1)
-            rhs_m1 += qp.weight() * dphi_rec.transpose()  * solution.st( qp.point(), number);
-        else
-            throw std::invalid_argument("Invalid discretization name for the plasticity term. Review the name in parametes.txt or pst.hho");
-        ++cont;
-    }
+            if(cont > cqs.size())
+                throw std::logic_error("Wrong access to columns");
 
-    //std::cout << "rhs_m1 : [ "<< rhs_m1 << " ]"<< std::endl;
-    //std::cout << "rhs_m2 : [ "<< rhs_m2 << " ]"<< std::endl;
+            //( Dv_T, sigma - alpha* gamma)_T
+            auto dphi   = cell_basis.eval_gradients(msh, cl, qp.point());
+            matrix_type   dphi_matrix = make_gradient_matrix(dphi);
 
-    size_t face_basis_offset = num_cell_dofs;
-    size_t offset    = cqs.size();
-
-    //#if 0
-    // Boundary term
-    for (size_t face_i = 0; face_i < num_faces; face_i++)
-    {
-        auto current_face_range = dsr.face_range(face_i);
-        auto fc   = fcs.at(face_i);
-        auto fqs  = face_quadrature.integrate(msh, fc);
-
-        //#if 0
-        auto n = normal(msh, cl, fc);
-        vector_type    rhs_f  = vector_type::Zero(face_basis.size());
-
-        for (auto& qp : fqs)
-        {
-            auto f_phi  = face_basis.eval_functions(msh, fc, qp.point());
-            auto c_phi  = cell_basis.eval_functions(msh, cl, qp.point());
-            auto c_dphi = cell_basis.eval_gradients(msh, cl, qp.point());
-
-            matrix_type c_dphi_matrix =   make_gradient_matrix(c_dphi);
-            matrix_type c_dphi_taken  =   take(c_dphi_matrix, row_range, col_range);
-            vector_type c_dphi_ruh    =   c_dphi_taken * ruh;
-
-            size_t  number_f;
-            if(!msh.is_boundary(fc))
+            if(pst.hho == 2)
             {
-                size_t number_nc;
-                auto   neighbor_id =  face_owner_cells_ids(msh, fc, cl);
-                auto   ngh   =  *std::next(msh.cells_begin(), neighbor_id);
-                auto   pts_ngh    =  points( msh , ngh);
-
-                for(auto& p : pts_ngh)
-                {
-                    if(p.x() < x0)
-                        number_nc = 1;
-                    if(p.x() > x0)
-                        number_nc = 2;
-                }
-                //std::cout << "number_nc( "<< ngh.get_id()<<") = "<< number    << std::endl;
-                if(!(number ==2 || number ==1) )
-                throw std::invalid_argument("Invalid number domain.");
-
-                //Esto escoge el valor de la derecha para tau_F
-                number_f = number;
-                if(number != number_nc )
-                {
-                    number_f == 1;
-                    std::cout << " changing number in cell "<< cl.get_id() << std::endl;
-                }
+                matrix_type dphi_  = take(dphi_matrix, row_range, cell_range);
+                rhs.head(num_cell_dofs)  += qp.weight() * dphi_.transpose()
+                                                * solution.st( qp.point(), number);
+            }
+            else if(pst.hho ==  1)
+            {
+                matrix_type dphi_taken  = take(dphi_matrix, row_range, col_range);
+                matrix_type dphi_rec = dphi_taken * rec_oper;
+                rhs  += qp.weight() * dphi_rec.transpose() * solution.st(qp.point(), number);
             }
             else
-            {
-                number_f = number;
-                //std::cout << "number_f( "<< cl.get_id()<<") = "<< number_f << std::endl;
-            }
+                throw std::invalid_argument("Invalid discretization name for the plasticity term. Review the name in parametes.txt or pst.hho");
 
-
-                // ((sigma - alpha*gamma) * n
-            vector_type str   =  solution.st( qp.point(), number);
-            vector_type str_f =  solution.st( qp.point(), number_f);
-            scalar_type p1_c  =  make_prod_stress_n( str , n);
-            scalar_type p1_f  =  make_prod_stress_n( str_f , n);
-
-            if(m_hho == 2)
-            {
-                //#if 0
-                // ( (sigma - alpha*gamma) * n, vT )_F
-                //for (size_t i = 0; i < num_cell_dofs; i++)
-                //    rhs_m2(i)   -= qp.weight() * p1_c * c_phi.at(i) ;
-
-                // ( (sigma - alpha*gamma) * n, vF )_F
-                //for (size_t i = 0, ii = current_face_range.min(); i < current_face_range.size(); i++, ii++)
-                //    rhs_m2(ii)  += qp.weight() * p1_f * f_phi.at(i);
-                //#endif
-                //#if 0
-                // ( (sigma - alpha*gamma) * n, vT )_F
-                for (size_t i = 0; i < num_cell_dofs; i++)
-                    rhs_c(i)   -= qp.weight() * p1_c * c_phi.at(i) ;
-
-                // ( (sigma - alpha*gamma) * n, vF )_F
-                for (size_t i = 0; i < num_face_dofs; i++)
-                    rhs_f(i)  += qp.weight() * p1_f * f_phi.at(i);
-                //#endif
-            }
-
-            //std::cout << " ** rhs_c : [ "<< rhs_c.transpose() << " ]"<< std::endl;
-            //std::cout << " ** rhs_f : [ "<< rhs_f.transpose() << " ]"<< std::endl;
-
-            ++cont;
         }
-        //std::cout << "face_basis_offset : "<< face_basis_offset << std::endl;
-        rhs_m2.block(face_basis_offset, 0, num_face_dofs,1) += rhs_f;
-        face_basis_offset += num_face_dofs;
-        //#endif
-        offset   += fqs.size();
 
-        std::cout << " * rhs_m1 : [ "<< rhs_m1.transpose() << " ]"<< std::endl;
-        std::cout << " * rhs_m2 : [ "<< rhs_m2.transpose() << " ]"<< std::endl;
+        // Boundary term
+        if(pst.hho == 2)
+        {
+            for (size_t face_i = 0; face_i < num_faces; face_i++)
+            {
+                auto current_face_range = dsr.face_range(face_i);
+                auto fc   = fcs.at(face_i);
+                auto fqs  = face_quadrature.integrate(msh, fc);
+
+                static_vector<T,2> n = normal(msh, cl, fc);
+
+
+                for (auto& qp : fqs)
+                {
+
+                    auto f_phi  = face_basis.eval_functions(msh, fc, qp.point());
+                    auto c_phi  = cell_basis.eval_functions(msh, cl, qp.point());
+                    size_t  number_f;
+                    if(!msh.is_boundary(fc))
+                    {
+                        auto cell_id =  cl.get_id();
+                        auto cells   =  face_owner_cells_ids(msh, fc);
+                        auto neighbor_id =  cells.first;
+                        if(cells.first != cell_id && cells.second == cell_id) //second part just to confirm cell is also owner
+                            neighbor_id =  cells.first;
+                        else if(cells.second != cell_id && cells.first == cell_id) //second part just to confirm cell is also owner
+                            neighbor_id = cells.second;
+                        else
+                            throw std::logic_error("Neighbors not found");
+
+                        auto ngh =  *std::next(msh.cells_begin(), neighbor_id);
+                        auto number_nc = set_cell_number(msh, ngh);
+
+                        //Esto escoge el valor de la derecha para tau_F
+                        number_f = number;
+                        if(number != number_nc )
+                            number_f == 1;
+                    }
+                    else
+                        number_f = number;
+
+
+                    // ((sigma - alpha*gamma) * n
+                    vector_type str   =  solution.st( qp.point(), number);
+                    vector_type str_f =  solution.st( qp.point(), number_f);
+                    scalar_type p1_c  =  make_prod( str , n);
+                    scalar_type p1_f  =  make_prod( str_f , n);
+
+                    // ( (sigma - alpha*gamma) * n, vT )_F
+                    for (size_t i = 0; i < num_cell_dofs; i++)
+                        rhs(i)   -= qp.weight() * p1_c * c_phi.at(i);
+
+                    // ( (sigma - alpha*gamma) * n, vF )_F
+                    for (size_t i = 0, ii = current_face_range.min();
+                                        i < current_face_range.size(); i++, ii++)
+                        rhs(ii)  += qp.weight() * p1_f * f_phi.at(i);
+                }
+            }
+        }
+
+        //compute_other(msh, cl, ruh, pst, tsr);
+        return rhs;
     }
-
-    rhs_m2.block(0, 0, num_cell_dofs,1) = rhs_c;
-
-    std::cout << " - rhs_m1 : [ "<< rhs_m1.transpose() << " ]"<< std::endl;
-    std::cout << " - rhs_m2 : [ "<< rhs_m2.transpose() << " ]"<< std::endl;
-
-    //#endif
-    if(offset != cont)
-        throw std::invalid_argument("Invalid indices in storing values at Gauss points");
-
-    if(m_hho == 1)
-        return rhs_m1;
-    else if(m_hho == 2)
-        return rhs_m2;
-    else
-        throw std::invalid_argument("Invalid discretization name for the plasticity term. Review the name in parametes.txt or pst.hho");
-}
-
 };
-#if 0
+
 template< typename T, typename Storage, typename CellType>
-T
+size_t
 set_cell_number(const  disk::mesh<T,2,Storage>& msh, const CellType& cl)
 {
+    //std::cout << "CELL :"<<cl.get_id() << std::endl;
     auto x0 = 0.5;
     auto pts = points(msh, cl);
     size_t number = 0;
@@ -1536,11 +1685,14 @@ set_cell_number(const  disk::mesh<T,2,Storage>& msh, const CellType& cl)
             number = 1;
         if(p.x() > x0)
             number = 2;
+        //std::cout << " * point : "<< p.x() << "  "<< p.y()  << std::endl;
+        //std::cout << " * number: "<< number << std::endl;
     }
     if(number == 0)
         throw std::invalid_argument("Invalid number domain.");
-}
-#endif
+    //std::cout << " * number_final: "<< number << std::endl;
+    return number;
+};
 
 
 template<typename T, size_t DIM>
@@ -1582,7 +1734,7 @@ struct poiseuille<T,1>: public solution<T,1>
          };
         sf =  [pst](const point_type& p)-> T
         {
-            T  ret, xO(0.), xL(pst.Lref);
+            T  ret, xO(0), xL(pst.Lref);
             T  xc = pst.Lref/2.0 - pst.Bn*pst.Lref*pst.f;
 
             if( p.x() >= xO & p.x() <=  xc)
@@ -1597,7 +1749,7 @@ struct poiseuille<T,1>: public solution<T,1>
         df =  [pst](const point_type& p)-> gradient_vector
         {
             gradient_vector ret   = gradient_vector::Zero();
-            T  xO(0.);
+            T  xO(0);
             T  xL(pst.Lref);
             T  xc = pst.Lref / 2.0  -  pst.Bn * pst.Lref * pst.f;
 
@@ -1627,9 +1779,6 @@ struct tuyau<T,2>: public solution<T,2>
     typedef std::function<T (const point_type & p, const size_t n)> nfunction;
     typedef std::function<gradient_vector(const point_type & p,const size_t n)>
                                                                          ndfunction;
-
-
-
 #if 0
     // not using the number
     bool            is_exact;
@@ -1710,12 +1859,17 @@ struct circular_tuyau<T,2>: public solution<T,2>
     typedef typename solution<T,2>::point_type      point_type;
     typedef typename solution<T,2>::gradient_vector gradient_vector;
 
+    typedef std::function<T (const point_type & p, const size_t n)> nfunction;
+    typedef std::function<gradient_vector(const point_type & p,const size_t n)>
+                                                                         ndfunction;
 
+    #if 0
     bool            is_exact;
     function        f,sf;
     dfunction       df;
     std::string     name;
     std::string     identity;
+
     circular_tuyau(plasticity_data<T>& pst)
     {
         is_exact = true;
@@ -1765,6 +1919,8 @@ struct circular_tuyau<T,2>: public solution<T,2>
             return ret;
         };
     };
+
+
     circular_tuyau(plasticity_data<T>& pst, const std::string& name)
     {
         is_exact = true;
@@ -1808,6 +1964,64 @@ struct circular_tuyau<T,2>: public solution<T,2>
 
             ret = (0.5*pst.f*R*R/pst.mu)*ret;
             return ret;
+        };
+    };
+    #endif
+
+    bool            is_exact;
+    function        f;
+    nfunction       sf;
+    ndfunction      df,st;
+    std::string     name;
+    std::string     identity;
+
+
+    circular_tuyau(plasticity_data<T>& pst, const std::string& name)
+    {
+        is_exact = true;
+        identity = "circular";
+        pst.f = 1.;
+        T   R = 1.; // this should be read from the mesh
+        f  = [pst](const point_type& p) -> T {
+            T ret = 1.;
+            return ret;
+        };
+        sf = [R,pst](const point_type& p, const size_t number) -> T {
+            T  ret = 0;
+            T    r = std::sqrt(p.x()*p.x() + p.y()*p.y());
+            T   Bi = 2. * pst.yield/(pst.f * R);
+
+            if(r/R > Bi)
+                ret = 0.5*(1. - (r/R)*(r/R)) - Bi*(1. - r/R);
+            else
+                ret = 0.5*(1. - Bi)*(1. - Bi);
+
+            ret = (0.5*pst.f*R*R/pst.mu)*ret;
+            return ret;
+        };
+        df = [R,pst](const point_type& p, const size_t number) -> gradient_vector {
+
+            gradient_vector ret   = gradient_vector::Zero();
+
+            T    r = std::sqrt(p.x()*p.x() + p.y()*p.y());
+            T   Bi = 2.*pst.yield/(pst.f*R);
+
+            if(r/R >= Bi)
+            {
+                T dfdr =  - r/(R*R) + Bi/R;
+                T drdx =  p.x()/r;
+                T drdy =  p.y()/r;
+                ret(0) = dfdr*drdx;
+                ret(1) = dfdr*drdy;
+            }
+
+            ret = (0.5*pst.f*R*R/pst.mu)*ret;
+            return ret;
+        };
+        st = [&](const point_type& p, const size_t number) -> gradient_vector {
+
+            throw std::invalid_argument("st function is not intended for circular_tuyau problem. Review solution definition and parameters.txt");
+            return gradient_vector::Zero();
         };
     };
 
@@ -1867,7 +2081,7 @@ struct diffusion<T,2>: public solution<T,2>
     #endif
     diffusion(plasticity_data<T>& pst , const std::string& name)
     {
-        is_exact = false;
+        is_exact = true;
         pst.f    = 1.;
         identity = "diffusion";
         f  = [&](const point_type& p) -> T {
@@ -1903,6 +2117,7 @@ struct diffusion<T,2>: public solution<T,2>
                     //std::cout << " bdn  = 2" << std::endl;
                     break;
                 default:
+                std::cout << "number: "<<number << std::endl;
                     throw std::invalid_argument("Not given values for this number, sf");
                     break;
             }
@@ -1935,11 +2150,11 @@ struct diffusion<T,2>: public solution<T,2>
             {
                 case 1:
                     ret(0) = p.x();
-                    ret(1) = 0.;
+                    ret(1) = p.x();//0.;
                     break;
                 case 2:
                     ret(0) = 0.5 * p.x();
-                    ret(1) = c1;
+                    ret(1) = 0.5 * p.x();//c1;
                     break;
                 default:
                     throw std::invalid_argument("Not given values for this number, st");
