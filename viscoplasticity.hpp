@@ -261,273 +261,6 @@ public:
     }
 };
 
-template<typename MeshType>
-class tensors2
-{
-public:
-
-    typedef MeshType   mesh_type;
-    typedef typename mesh_type::cell      cell_type;
-    typedef typename mesh_type::face      face_type;
-    typedef typename mesh_type::scalar_type    scalar_type;
-    typedef tensor_bones<MeshType, cell_type>  cell_tensor_type;
-    typedef tensor_bones<MeshType, face_type>  face_tensor_type;
-    typedef std::vector<cell_tensor_type>      cell_tensor_vector;
-    typedef std::vector<face_tensor_type>      face_tensor_vector;
-    typedef dynamic_matrix<scalar_type>        matrix_type;
-    typedef dynamic_vector<scalar_type>        vector_type;
-
-    cell_tensor_vector  cells;
-    face_tensor_vector  faces;
-
-    tensors2()
-    {}
-
-    tensors2(const MeshType& msh)
-    {
-        cells = cell_tensor_vector(msh.cells_size());
-        faces = face_tensor_vector(msh.faces_size());
-    }
-
-    tensors2(const size_t cells_size, const size_t faces_size)
-    {
-        cells = cell_tensor_vector(cells_size);
-        faces = face_tensor_vector(faces_size);
-    }
-    template<typename CellBasisType, typename FaceBasisType>
-    void
-    zero_vector(const mesh_type msh, const size_t& degree)
-    {
-        CellBasisType cell_basis(degree + 1);
-        FaceBasisType face_basis(degree);
-
-        size_t num_cell_dofs = cell_basis.range(1, degree+1).size();
-        size_t num_face_dofs = face_basis.range(0, degree).size();
-
-        cells = cell_tensor_vector(msh.cells_size());
-        faces = face_tensor_vector(msh.faces_size());
-
-        for (auto& cl : msh)
-        {
-            auto num_faces = number_of_faces(msh, cl);
-
-            auto  id = cl.get_id();
-            tensor_bones<mesh_type, cell_type>  ptsr(msh, cl, degree, num_cell_dofs);
-            cells.at(id)  =  ptsr;
-        }
-
-        for (auto itor = msh.faces_begin(); itor != msh.faces_end(); itor++)
-        {
-            auto face = *itor;
-            auto id = msh.lookup(face);
-            tensor_bones<mesh_type, face_type>  ptsr(msh, face, degree, num_face_dofs);
-            faces.at(id) =  ptsr;
-        }
-        return;
-    };
-    auto  at_all_cells() {  return cells;}
-    auto  at_all_faces() {  return faces;}
-
-    typedef typename cell_tensor_vector::iterator         cell_iterator;
-    typedef typename cell_tensor_vector::const_iterator   const_cell_iterator;
-
-    cell_iterator           at_cells_begin() { return cells.begin(); }
-    cell_iterator           at_cells_end()   { return cells.end(); }
-    const_cell_iterator     at_cells_begin() const { return cells.begin(); }
-    const_cell_iterator     at_cells_end()   const { return cells.end(); }
-
-    /* face iterators */
-    typedef typename face_tensor_vector::iterator        face_iterator;
-    typedef typename face_tensor_vector::const_iterator  const_face_iterator;
-
-    face_iterator           at_faces_begin() { return faces.begin(); }
-    face_iterator           at_faces_end()   { return faces.end(); }
-    const_face_iterator     at_faces_begin() const { return faces.begin(); }
-    const_face_iterator     at_faces_end()   const { return faces.end(); }
-
-    vector_type  at_cell (const mesh_type & msh, const cell_type& cl) const
-    {
-        auto id = msh.lookup(cl);
-        return cells.at(id);
-    };
-
-    vector_type at_cell (const mesh_type & msh, const cell_iterator & itor) const
-    {
-        auto id = msh.lookup(*itor);
-        return cells.at(id);
-    };
-
-    vector_type
-    at_face(const mesh_type & msh, const face_type& fc)
-    {
-        auto id = msh.lookup(fc);
-        return faces.at(id);
-    };
-
-    vector_type
-    at_face(const mesh_type & msh, const face_iterator & itor)
-    {
-        auto id = msh.lookup(*itor);
-        return faces.at(id);
-    };
-
-    void
-    save(const mesh_type & msh, const cell_type & cl, const vector_type& vec)
-    {
-        auto id = msh.lookup(cl);
-        cells.at(id) = vec;
-        return;
-    }
-    void
-    save(const mesh_type & msh, const face_type & fc, const vector_type& vec)
-    {
-        auto id = msh.lookup(fc);
-        faces.at(id) = vec;
-        return;
-    }
-    auto
-    degree(const mesh_type & msh, const cell_type& cell)
-    {
-        auto id = msh.lookup(cell);
-        return cells.at(id).m_degree;
-    }
-    auto
-    degree(const mesh_type & msh, const face_type& face)
-    {
-        auto id = msh.lookup(face);
-        return faces.at(id).m_degree;
-    }
-};
-
-template<typename MeshType>
-class other
-{
-public:
-
-    typedef MeshType   mesh_type;
-    typedef typename mesh_type::cell      cell_type;
-    typedef typename mesh_type::face      face_type;
-    typedef typename mesh_type::scalar_type    scalar_type;
-    typedef dynamic_matrix<scalar_type>        matrix_type;
-    typedef dynamic_vector<scalar_type>        vector_type;
-    typedef std::vector<vector_type>           vec_vec_type;
-    std::vector<vector_type> cell_tensor_vector;
-    std::vector<vector_type> face_tensor_vector;
-
-
-    other()
-    {}
-
-    other(const MeshType& msh)
-    {
-        cell_tensor_vector = std::vector<vector_type>(msh.cells_size());
-        face_tensor_vector = std::vector<vector_type>(msh.faces_size());
-    }
-
-    other(const size_t cells_size, const size_t faces_size)
-    {
-        cell_tensor_vector = std::vector<vector_type>(cells_size);
-        face_tensor_vector = std::vector<vector_type>(faces_size);
-    }
-    template<typename CellBasisType, typename FaceBasisType>
-    void
-    zero_vector(const mesh_type msh, const size_t& degree)
-    {
-        CellBasisType cell_basis(degree + 1);
-        FaceBasisType face_basis(degree);
-
-        size_t num_cell_dofs = cell_basis.range(1, degree+1).size();
-        size_t num_face_dofs = face_basis.range(0, degree).size();
-
-        cell_tensor_vector = std::vector<vector_type>(msh.cells_size());
-        face_tensor_vector = std::vector<vector_type>(msh.faces_size());
-
-        for (auto& cl : msh)
-        {
-            auto num_faces = number_of_faces(msh, cl);
-            auto id = cl.get_id();
-            cell_tensor_vector.at(id)  =  vector_type::Zero(num_cell_dofs);
-        }
-
-        for (auto itor = msh.faces_begin(); itor != msh.faces_end(); itor++)
-        {
-            auto face = *itor;
-            auto id = msh.lookup(face);
-            face_tensor_vector.at(id)  =  vector_type::Zero(num_face_dofs);
-        }
-        return;
-    };
-    auto  at_all_cells(void) {  return cell_tensor_vector;}
-    auto  at_all_faces(void) {  return face_tensor_vector;}
-
-    typedef typename vec_vec_type::iterator         cell_iterator;
-    typedef typename vec_vec_type::const_iterator   const_cell_iterator;
-
-    cell_iterator           at_cells_begin() { return cell_tensor_vector.begin(); }
-    cell_iterator           at_cells_end()   { return cell_tensor_vector.end(); }
-    const_cell_iterator     at_cells_begin() const { return cell_tensor_vector.begin(); }
-    const_cell_iterator     at_cells_end()   const { return cell_tensor_vector.end(); }
-
-    /* face iterators */
-    typedef typename vec_vec_type::iterator        face_iterator;
-    typedef typename vec_vec_type::const_iterator  const_face_iterator;
-
-    face_iterator           at_faces_begin() { return face_tensor_vector.begin(); }
-    face_iterator           at_faces_end()   { return face_tensor_vector.end(); }
-    const_face_iterator     at_faces_begin() const { return face_tensor_vector.begin(); }
-    const_face_iterator     at_faces_end()   const { return face_tensor_vector.end(); }
-
-    vector_type
-    at_cell(const mesh_type & msh, const cell_type& cl)
-    {
-        auto id = msh.lookup(cl);
-        return cell_tensor_vector.at(id);
-    };
-
-    vector_type
-    at_cell(const mesh_type & msh, const cell_iterator & itor)
-    {
-        auto id = msh.lookup(*itor);
-        return cell_tensor_vector.at(id);
-    };
-
-    vector_type
-    at_face(const mesh_type & msh, const face_type& fc)
-    {
-        auto id = msh.lookup(fc);
-        return face_tensor_vector.at(id);
-    };
-
-    vector_type
-    at_face(const mesh_type & msh, const face_iterator & itor)
-    {
-        auto id = msh.lookup(*itor);
-        return face_tensor_vector.at(id);
-    };
-
-    void
-    save(const mesh_type & msh, const cell_type & cl, const vector_type& vec)
-    {
-        auto id = msh.lookup(cl);
-        cell_tensor_vector.at(id) = vec;
-        return;
-    }
-    void
-    save(const mesh_type & msh, const face_type & fc, const vector_type& vec)
-    {
-        auto id = msh.lookup(fc);
-        face_tensor_vector.at(id) = vec;
-        return;
-    }
-    void
-    instantiate_at_cells(const size_t i){ cell_tensor_vector = vec_vec_type(i);return;}
-    void
-    instantiate_at_faces(const size_t i){ face_tensor_vector = vec_vec_type(i);return;}
-
-};
-
-
-
 
 template<typename MeshType>
 class tensors
@@ -595,13 +328,16 @@ public:
     const_cell_iterator     at_cells_end()   const { return cell_tensor_vector.end(); }
 
     /* face iterators */
-    typedef typename vec_vec_type::iterator        face_iterator;
-    typedef typename vec_vec_type::const_iterator  const_face_iterator;
+    typedef typename vec_mat_type::iterator        face_iterator;
+    typedef typename vec_mat_type::const_iterator  const_face_iterator;
 
     face_iterator           at_faces_begin() { return c_face_tensor_vector.begin(); }
     face_iterator           at_faces_end()   { return c_face_tensor_vector.end(); }
     const_face_iterator     at_faces_begin() const { return c_face_tensor_vector.begin(); }
     const_face_iterator     at_faces_end()   const { return c_face_tensor_vector.end(); }
+
+    size_t  at_all_cells_size() const { return cell_tensor_vector.size(); }
+    size_t  at_all_faces_size() const { return c_face_tensor_vector.size(); }
 
     vector_type
     at_cell(const mesh_type & msh, const cell_type& cl)
@@ -623,6 +359,13 @@ public:
         auto id  = msh.lookup(cl);
         auto pos = face_position(msh, cl, fc);
         return c_face_tensor_vector.at(id).col(pos);
+    };
+
+    matrix_type
+    at_element_faces(const mesh_type & msh, const cell_type& cl)
+    {
+        auto id  = msh.lookup(cl);
+        return c_face_tensor_vector.at(id);
     };
 
     vector_type
@@ -694,7 +437,7 @@ class plasticity2
 
 public:
 
-    tensors_type                m_multiplicator;
+    tensors_type                m_multiplier;
     tensors_type                m_decoupled_var;
 
     plasticity2()
@@ -719,14 +462,11 @@ public:
             m_method_coef = 1. / pst.alpha ;
         else
             m_method_coef = 1. / (pst.alpha + pst.mu);
-
-            matrix_type temp =  stabilization_opers.at(0);
-            matrix_type temp2 = m_stabilization_opers.at(0);
     }
 
     template<typename Errors>
     void
-    update_multiplicator(const mesh_type    & msh,
+    update_multiplier(const mesh_type    & msh,
                          tensors_type       & mtp,
                          const std::vector<vector_type>& velocity,
                          Errors       & error)
@@ -897,66 +637,12 @@ public:
         vector_type gamma = MG.ldlt().solve(lhs_vec);
         m_decoupled_var.save( msh, cl, gamma);
 
-        #if 0
-        // Esto solo funciona para 2D!!!!!!!! (triangulos), revisar
-        auto whole_range = cell_basis.range(0, m_degree+1);
-        auto test_pts = make_test_points(msh, cl, m_degree);
-        std::cout << "cell_basis.size :  "<< cell_basis.range(0, m_degree+1).size() << std::endl;
-        std::cout << "test_pts.size   :  "<<  test_pts.size()<< std::endl;
-        assert(cell_basis.range(0, m_degree+1).size() /DIM == test_pts.size());
-
-        matrix_type Ak_mat = matrix_type::Zero(whole_range.size(), whole_range.size());
-        vector_type Fk_vec = vector_type::Zero(whole_range.size());
-        size_t i = 0;
-
-        for(auto& p : test_pts)
-        {
-            matrix_type mat = matrix_type::Zero(cell_basis.size(), cell_basis.size());
-
-            auto c_dphi = cell_basis.eval_gradients(msh, cl, p);
-
-            /* LHS: take basis functions derivatives from degree 1 to K+1 */
-            auto MG_rowcol_range = cell_basis.range(1, m_degree+1);
-            matrix_type MG = take(mat, MG_rowcol_range, MG_rowcol_range);
-            matrix_type c_dphi_0  = make_gradient_matrix(c_dphi, row_range, one_range);
-            matrix_type c_dphi_all  = make_gradient_matrix(c_dphi);
-
-            std::cout << " * i : "<< i << std::endl;
-            std::cout << " * one_range.size"<< one_range.size() << std::endl;
-            std::cout << " * c_dphi_0. size"<< c_dphi_0.rows() << "x" << c_dphi_0.cols() << std::endl;
-
-            // Eval point-wise gamma function at test points
-            vector_type theta = sigma  +  pst.alpha * dphi_ruh;
-            vector_type theta_eval =  c_dphi_0 * theta;
-            std::cout << " * theta_eval. size"<< theta_eval.rows() << "x" << theta_eval.cols() << std::endl;
-
-            auto  theta_eval_norm  =  theta_eval.norm();
-
-            vector_type gamma_eval = vector_type::Zero(mesh_type::dimension);
-            if(theta_eval_norm > pst.yield)
-                gamma_eval = m_method_coef * (theta_eval_norm - pst.yield) *
-                                                (theta_eval / theta_eval_norm);
-
-            std::cout << " * gamma_eval. size"<< gamma_eval.rows() << "x" << gamma_eval.cols() << std::endl;
-
-            A_mat.block(i * DIM, 0, DIM, whole_range.size()) = c_dphi_all;
-            F_vec.block(i * DIM, 0, DIM, 1) =  gamma_eval;
-            i++;
-
-            std::cout << "end" << std::endl;
-        }
-
-        //Recover gamma function: DOFs in \nabla P^(k+1)
-        vector_type gamma_zero = A_mat.ldlt().solve(F_vec);
-        vector_type gamma = gamma_zero.tail(one_range.size());
-        m_decoupled_var.save( msh, cl, gamma);
-        #endif
         return;
     }
 
     void
     compute_decoupling(const mesh_type     & msh,
-                       const tensors_type  & multiplicator,
+                       const tensors_type  & multiplier,
                        const vec_vec_type  & velocity)
     {
         m_decoupled_var.instantiate(msh.cells_size());
@@ -966,13 +652,13 @@ public:
         {
             auto id  = msh.lookup(cl);
             auto fcs = faces(msh, cl);
-            vector_type sigma   = multiplicator.at_cell( msh, cl);
+            vector_type sigma   = multiplier.at_cell( msh, cl);
             vector_type vel_TF  = velocity.at(id);
             eval_plasticity( msh, cl, sigma, vel_TF);
 
             for (auto & fc :fcs)
             {
-                vector_type varsigma = multiplicator.at_face( msh, cl, fc );
+                vector_type varsigma = multiplier.at_face( msh, cl, fc );
                 eval_plasticity(msh, cl, fc, varsigma, vel_TF);
             }
         }
@@ -982,7 +668,7 @@ public:
     vector_type
     compute_integral(const mesh_type     & msh,
                      const cell_type     & cl,
-                     const tensors_type  & multiplicator)
+                     const tensors_type  & multiplier)
     {
         auto num_faces  = number_of_faces(msh, cl);
         auto cell_range = cell_basis.range(0, m_degree);
@@ -992,15 +678,15 @@ public:
         auto a_faces_range = dsr.all_faces_range();
         vector_type ret = vector_type::Zero(dsr.total_size());
 
-        ret  = compute_cell_integral( msh, cl, multiplicator);
-        ret += compute_faces_integral(msh, cl, dsr, multiplicator);
+        ret  = compute_cell_integral( msh, cl, multiplier);
+        ret += compute_faces_integral(msh, cl, dsr, multiplier);
         return ret;
     }
 
     vector_type
     compute_cell_integral(const mesh_type    & msh,
                           const cell_type    & cl,
-                          const tensors_type & multiplicator)
+                          const tensors_type & multiplier)
     {
 
         auto cell_quadpoints = cell_quadrature.integrate(msh, cl);
@@ -1008,7 +694,7 @@ public:
         vector_type new_sigma = vector_type::Zero(cell_quadpoints.size());
         matrix_type stiff_mat = matrix_type::Zero(cell_basis.size(), cell_basis.size());
 
-        vector_type sigma = multiplicator.at_cell( msh, cl );
+        vector_type sigma = multiplier.at_cell( msh, cl );
         vector_type gamma = m_decoupled_var.at_cell( msh, cl );
 
         for (auto& qp : cell_quadpoints)
@@ -1034,7 +720,7 @@ public:
     compute_faces_integral( const mesh_type   & msh,
                             const cell_type   & cl,
                             const dofspace_ranges & dsr,
-                            const tensors_type    & multiplicator)
+                            const tensors_type    & multiplier)
     {
         auto pts = points(msh, cl);
         auto fcs = faces(msh, cl);
@@ -1067,7 +753,7 @@ public:
 
             }
 
-            vector_type varsigma = multiplicator.at_face(msh, cl, fc);
+            vector_type varsigma = multiplier.at_face(msh, cl, fc);
             vector_type Psi  = m_decoupled_var.at_face(msh, cl, fc);
             matrix_type STF  = stab_oper(msh, cl, fc);
 

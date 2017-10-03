@@ -63,15 +63,6 @@ public:
         face_basis          = face_basis_type(m_degree);
         face_quadrature     = face_quadrature_type(2*m_degree);
     }
-    gradient_reconstruction_pst(const size_t& degree, const size_t& quad_degree)
-        : m_degree(degree)
-    {
-        std::cout << "degree : "<< degree<< "  ; m_degree :"<< m_degree << std::endl;
-        cell_basis          = cell_basis_type(m_degree+1);
-        cell_quadrature     = cell_quadrature_type(quad_degree);
-        face_basis          = face_basis_type(m_degree);
-        face_quadrature     = face_quadrature_type(2*m_degree);
-    }
     std::pair<matrix_type, matrix_type>
     compute(const mesh_type& msh, const cell_type& cl)
     {
@@ -837,6 +828,44 @@ public:
         }
 
         return ret;
+    }
+
+    template<typename Function>
+    vector_type
+    compute_face(const mesh_type& msh, const cell_type& cl,
+                    const face_type & fc, const Function& f)
+    {
+        //if(mp.diff)
+        auto number = set_cell_number(msh, cl);
+
+        matrix_type mm = matrix_type::Zero(face_basis.size(), face_basis.size());
+        vector_type rhs = vector_type::Zero(face_basis.size());
+
+        auto face_quadpoints = face_quadrature.integrate(msh, fc);
+        for (auto& qp : face_quadpoints)
+        {
+            auto phi = face_basis.eval_functions(msh, fc, qp.point());
+            auto fval = f(qp.point(), number);
+
+#ifdef FILL_COLMAJOR
+            for (size_t j = 0; j < phi.size(); j++)
+            {
+                for (size_t i = 0; i < phi.size(); i++)
+                    mm(i,j) += qp.weight() * mm_prod(phi[i], phi[j]);
+
+                rhs(j) += qp.weight() * mm_prod(fval, phi[j]);
+            }
+#else
+            for (size_t i = 0; i < phi.size(); i++)
+            {
+                for (size_t j = 0; j < phi.size(); j++)
+                    mm(i,j) += qp.weight() * mm_prod(phi[i], phi[j]);
+
+                rhs(i) += qp.weight() * mm_prod(fval, phi[i]);
+            }
+#endif
+        }
+        return mm.llt().solve(rhs);
     }
 };
 

@@ -293,11 +293,11 @@ struct variable2
     typedef typename MeshType::scalar_type scalar_type;
     variable2(){}
     std::vector<dynamic_vector<scalar_type>>  velocity_Th;
-    disk::tensors<MeshType>                  stress_Th;
+    disk::tensors<MeshType>                  stresses_Th;
 
     variable2& operator=(const variable2& other) {
         velocity_Th   = other.velocity_Th;
-        stress_Th     = other.stress_Th;
+        stresses_Th     = other.stresses_Th;
         return *this;
     }
     template<typename CellBasisType, typename FaceBasisType>
@@ -305,7 +305,7 @@ struct variable2
     Zero(const MeshType& msh, const size_t degree)
     {
         velocity_Th = solution_zero_vector(msh, degree);
-        stress_Th.template zero_vector<CellBasisType,FaceBasisType>(msh, degree);
+        stresses_Th.template zero_vector<CellBasisType,FaceBasisType>(msh, degree);
     }
 };
 
@@ -605,8 +605,8 @@ public:
                 if(imsh == 0 && solution.is_exact && mp.start_exact)
                     u_local = projk.compute_whole(msh, cl, solution.sf);
 
-                pst_rhs = plasticity.compute_integral(msh, cl, var.stress_Th);
-                //auto tsr = var.stress_Th.at(cell_id);
+                pst_rhs = plasticity.compute_integral(msh, cl, var.stresses_Th);
+                //auto tsr = var.stresses_Th.at(cell_id);
                 //pst_rhs = plasticity.compute(msh, cl, rec_oper, u_local, pst, tsr);
                 //pst_rhs = statcond_pst.plasticity_rhs(msh, cl, rec_oper, u_local, pst, tsr);
             }
@@ -710,8 +710,8 @@ public:
 
 
         auto gamma     = plasticity.m_decoupled_var.at_cell(msh, cl);
-        auto sigma     = var.stress_Th.at_cell(msh, cl);
-        auto sigma_old = old_var.stress_Th.at_cell(msh, cl);
+        auto sigma     = var.stresses_Th.at_cell(msh, cl);
+        auto sigma_old = old_var.stresses_Th.at_cell(msh, cl);
 
         e.gamma  +=  (gamma - ruh).transpose() * MG * (gamma - ruh);
         e.sigma  +=  (sigma - sigma_old).transpose() * MG *(sigma - sigma_old);
@@ -815,7 +815,7 @@ public:
                 //pst_rhs = plasticity.compute(msh, cl, rec_oper, u_local, pst, solution);
             }
             else        //normal plasticity
-                pst_rhs = plasticity.compute_integral(msh, cl, var.stress_Th);
+                pst_rhs = plasticity.compute_integral(msh, cl, var.stresses_Th);
 
             vector_type x = statcond_pst.recover(msh, cl, loc_mat, cell_rhs, xFs,
                                                               on_pst * pst_rhs);
@@ -836,6 +836,238 @@ public:
 
         return error;
     }
+    std::vector<matrix_type>
+    precompute_gradient(const mesh_type& msh)
+    {
+        typedef std::pair<matrix_type, matrix_type> gradrec_pair;
+        std::vector<matrix_type> vec(msh.cells_size());
+        gradrec_type gradrec = gradrec_type(m_degree);
+        size_t i = 0;
+        for(auto& cl : msh)
+        {
+            gradrec_pair  gp =  gradrec.compute(msh, cl);
+            vec.at(i) =  gp.first;
+            i++;
+        }
+        return vec;
+    }
+    template<typename LoaderType, typename Solution, typename MeshParameters,
+                typename PlasticData>
+    auto
+    mesh_procedure(const mesh_type      & old_msh,
+                    const variable_type & var,
+                    const LoaderType    & loader,
+                    const Solution      & solution,
+                    const PlasticData   & pst,
+                    const MeshParameters& mp,
+                    const size_t imsh)
+    {
+        std::cout << "INSIDE MESH_PROCEDURE" << std::endl;
+
+        std::cout << mp << std::endl;
+        std::cout << pst << std::endl;
+
+        std::pair< bool, mesh_type> ret;
+        mesh_type new_msh;
+
+        disk::dump_to_matlab(old_msh, mp.directory  +  "/old_mesh.m");
+
+        auto info  =  mp.summary + "_RC" + tostr(imsh);
+
+        std::cout << "* Size LEVELS  1: "<< levels_vec.size()  << std::endl;
+
+        disk::stress_based_mesh<mesh_type> sbm(old_msh, levels_vec, pst, mp, imsh);
+
+        if(imsh == 0)
+            new_msh = sbm.template refine<LoaderType>(old_msh, m_degree);
+        else
+        {
+            if(!mp.mark_all)
+            {
+                std::vector<matrix_type> reconstruction_opers = precompute_gradient(old_msh);
+
+                auto any = sbm.template marker<cell_basis_type, face_basis_type, Solution>
+                        (old_msh, var, pst, m_degree, solution, reconstruction_opers);
+
+                if(!any)
+                    return std::make_pair(false, old_msh);
+            }
+            new_msh = sbm.template refine<LoaderType>(old_msh, m_degree);
+        }
+        auto filename =  mp.directory + "/mesh" + mp.summary + "_R" + tostr(imsh) + ".m";
+        dump_to_matlab(new_msh, filename, levels_vec, imsh);
+
+        std::vector<size_t>().swap(levels_vec);
+        levels_vec    = sbm.new_levels;
+        ancestors_vec = sbm.ancestors;
+        cells_marks   = sbm.cells_marks;
+        std::cout << "Size LEVELS  2: "<< levels_vec.size()  << std::endl;
+
+        return std::make_pair(true, new_msh);
+    }
+    template<typename LoaderType, typename MeshParameters>
+    mesh_type
+    load_mesh_procedure(const mesh_type     & old_msh,
+                        const MeshParameters& mp,
+                        const size_t imsh)
+    {
+        typedef std::vector<size_t> sizet_vector_type;
+        std::cout << "INSIDE LOAD_MESH_PROCEDURE ("<< imsh  <<")"<< std::endl;
+
+        //1_Loading new mesh
+        mesh_type      new_msh;
+        LoaderType     new_loader;
+
+        auto info_other   =  mp.summary_old + "_" + mp.short_mesh_name + ".typ1";
+        auto new_msh_file =  mp.directory + "/amesh_" + tostr(imsh) + info_other;
+
+        if (!new_loader.read_mesh(new_msh_file))
+            throw std::logic_error ("Problem loading mesh.");
+
+        new_loader.populate_mesh(new_msh);
+        auto num_cells  = new_msh.cells_size();
+
+        if(mp.recycle)
+        {
+            ancestors_vec  = sizet_vector_type(num_cells);
+
+            //2 load ancestors and level info
+            std::vector<std::pair<size_t,size_t>> levels_ancestors;
+            sizet_vector_type   index_transf;
+            disk::load_data(levels_ancestors, index_transf, mp, "/levels","R", imsh);
+            assert( num_cells  == levels_ancestors.size());
+
+            //3. Ancestors an levels
+            levels_vec = sizet_vector_type(num_cells);
+
+            size_t i = 0;
+            for(auto& pair : levels_ancestors)
+            {
+                levels_vec.at(i) = pair.first;
+                ancestors_vec.at(i)  = pair.second;
+                i++;
+            }
+        //if(mp.recycle)
+        //{
+            //4. cells_marks
+            cells_marks = sizet_vector_type(num_cells);
+            disk::load_data(cells_marks, mp, "/marks", "RC", imsh);
+
+        }
+
+        //Updating the mesh
+        return new_msh;
+    }
+    template<typename MeshParameters>
+    auto
+    solution_procedure( const mesh_type  & new_msh,
+                        const mesh_type  & old_msh,
+                        const variable_type   & old_var,
+                        const MeshParameters& mp,
+                        const size_t imsh)
+    {
+        std::cout << "INSIDE SOLUTION_PROCEDURE" << std::endl;
+
+
+        typedef std::vector<size_t> sizet_vector_type;
+        variable_type var;
+
+        auto num_cells  = new_msh.cells_size();
+        auto info  =  mp.summary + "_RC" + tostr(imsh);
+
+
+        if(imsh > 0 && mp.recycle)
+        {
+            //2_Precompute Gradient reconstruction operator
+            std::vector<matrix_type> grad_global;
+            grad_global =  precompute_gradient(old_msh);
+
+            var.velocity_Th = disk::proj_rec_solution< mesh_type, T,
+                                cell_basis_type, cell_quadrature_type,
+                                face_basis_type, face_quadrature_type>
+            (new_msh, old_msh, grad_global, old_var.velocity_Th, ancestors_vec, m_degree);
+
+            var.stresses_Th = disk::project_stresses< mesh_type, T,
+                                cell_basis_type, cell_quadrature_type,
+                                face_basis_type, face_quadrature_type, tensors_type>
+            (new_msh, old_msh, old_var.stresses_Th, ancestors_vec, m_degree);
+
+
+            #if 0
+
+            std::cout << "SAVING SIGMA_INTER_R" << std::endl;
+            auto filename = mp.directory + "/SIGMA_INTER_R" + tostr(imsh)+ ".m";
+            disk::quiver_matlab(new_msh, filename, quad_degree, sigma);
+            #endif
+
+            return var;
+        }
+        else
+        {
+            //std::cout << "* SOLUTION_PROCEDURE ELSE" << std::endl;
+            var.template Zero<cell_basis_type,face_basis_type>(new_msh, m_degree);
+            return var;
+        }
+    }
+    template< typename MeshParameters>
+    auto
+    load_solution_procedure(const mesh_type     & new_msh,
+                            const mesh_type     & old_msh,
+                            const MeshParameters& mp,
+                            const size_t imsh)
+    {
+        std::cout << "INSIDE LOAD_SOLUTION_PROCEDURE" << std::endl;
+
+        typedef std::vector<size_t>             sizet_vector_type;
+        variable_type  var, old_var;
+
+        auto info_other =  mp.summary_old + "_" + mp.short_mesh_name + ".typ1";
+        auto num_cells  = new_msh.cells_size();
+        std::cout << "* recycle = "<< mp.recycle << std::endl;
+        if(!mp.recycle)
+        {
+            std::cout << "Not recycling former solution" << std::endl;
+            var.template Zero<cell_basis_type,face_basis_type>(new_msh, m_degree);
+            return var;
+        }
+        else
+        {
+            //Load Uh_Th and tensor data
+            disk::load_data(old_var.velocity_Th, mp, "/Uh","R", imsh - 1);
+            disk::load_data(old_var.stresses_Th, old_msh, mp, "R",imsh);
+            assert( old_var.velocity_Th.size()  == old_msh.cells_size());
+            assert( old_var.stresses_Th.size()== old_msh.cells_size());
+
+            //5_Precompute Gradient reconstruction operator
+            std::vector<matrix_type> grad_global;
+            grad_global = precompute_gradient(old_msh);
+
+            var.velocity_Th = disk::proj_rec_solution< mesh_type, T,
+                        cell_basis_type, cell_quadrature_type,
+                            face_basis_type, face_quadrature_type>
+            (new_msh, old_msh, grad_global, old_var.velocity_Th, ancestors_vec, m_degree);
+
+            #if 0
+            var.stresses_Th = sigma_interpolation(new_msh, old_msh,
+                                         old_var.stresses_Th,
+                                         ancestors_vec, cells_marks,  m_degree);
+
+
+            std::vector<disk::punctual_tensor<mesh_type>> sigma(new_msh.cells_size());
+            auto quad_degree = var.stresses_Th.at(0).sigma.m_quad_degree;
+            for(auto& cl: new_msh)
+            {
+                 size_t id  = cl.get_id();
+                 sigma.at(id)   = var.stresses_Th.at(id).sigma;
+            }
+            std::cout << "SAVING SIGMA_INTER_R" << std::endl;
+            auto filename = mp.directory + "/SIGMA_INTER_R" + tostr(imsh)+ ".m";
+            disk::get_from_tensor(sigma, var.stresses_Th, "sigma");
+            disk::quiver_matlab(new_msh, filename, quad_degree, sigma);
+            #endif
+            return var;
+        }
+    }
 
     template<typename LoaderType, typename Solution, typename PlasticData,
                 typename MeshParameters>
@@ -850,11 +1082,45 @@ public:
     {
         std::cout << "INSIDE TEST_PROCEDURE" << std::endl;
 
-        levels_vec    = std::vector<size_t>(old_msh.cells_size());
-        ancestors_vec = std::vector<size_t>(old_msh.cells_size());
-        cells_marks   = std::vector<size_t>(old_msh.cells_size());
-        var.template Zero<cell_basis_type,face_basis_type>(old_msh, m_degree);
-        return std::make_pair(true, old_msh);
+        bool refine;
+        mesh_type new_msh;
+
+        if(mp.call_mesher) //&& imsh > 0)
+        {
+            if( imsh == mp.initial_imsh)
+            {
+                if(mp.initial_imsh == 0)
+                {
+                    auto pair = mesh_procedure(old_msh, var, loader, solution,
+                                                                pst, mp, imsh);
+                    new_msh = pair.second;
+                    var  = solution_procedure(new_msh, old_msh, var, mp, imsh);
+                }
+                else
+                {
+                        new_msh = load_mesh_procedure<LoaderType>(old_msh, mp, imsh);
+                        //if(mp.start_exact)
+                            var.template Zero<cell_basis_type,face_basis_type>(new_msh, m_degree);
+                        #if 0
+                        else
+                            var  = load_solution_procedure(new_msh, old_msh, mp, imsh);
+                        //var = exact_solution_procedure(new_msh, old_msh, mp, imsh, solution.sf);
+                        std::cout << "Size LEVELS: "<< levels_vec.size()  << std::endl;
+                        #endif
+                }
+                return std::make_pair(true, new_msh);
+            }
+            else
+            {
+                auto pair = mesh_procedure(old_msh, var, loader, solution, pst, mp, imsh);
+                new_msh = pair.second;
+                var = solution_procedure(new_msh, old_msh, var, mp, imsh);
+
+                return pair;
+            }
+        }
+        else
+            return std::make_pair(true, old_msh);
     }
 
     template<typename Solution, typename MeshParameters, typename PlasticData>
@@ -893,7 +1159,7 @@ public:
 
             kappa = compute_kappa(kappa, is_kappa_diff, on_pst, pst, mp, solution, iter, imsh);
             make_stiff_matrix(msh, kappa, is_kappa_diff, biforms);
-            plasticity.compute_decoupling( msh, var.stress_Th,  var.velocity_Th);
+            plasticity.compute_decoupling( msh, var.stresses_Th,  var.velocity_Th);
             make_rhs_vector(msh, var, biforms, pst, solution, mp, kappa, on_pst, imsh);
 
             vector_type X = solver.solve(assembly_pst.rhs);
@@ -903,7 +1169,7 @@ public:
                                                     solution, mp, kappa, on_pst);
 
 
-            plasticity.update_multiplicator(msh, var.stress_Th, var.velocity_Th, error);
+            plasticity.update_multiplier(msh, var.stresses_Th, var.velocity_Th, error);
 
             auto solver_conv = std::abs(old_error_gamma - error.gamma);
             old_error_gamma  = error.gamma;
@@ -920,8 +1186,8 @@ public:
                 break;
         }
 
-        disk::postprocess(msh, var.stress_Th, var.velocity_Th, reconstruction_opers,
-                                                                mp, m_degree);
+        disk::postprocess(msh, var.stresses_Th, var.velocity_Th, reconstruction_opers,
+                                                                mp, m_degree, imsh);
         disk::execute(exfs, mp, pst, imsh);
     }
 
@@ -1004,13 +1270,13 @@ int main (int argc, char** argv )
         typedef disk::fvca5_mesh_loader<RealType, 2>            loader_type;
         typedef Eigen::Matrix< RealType, 2, Eigen::Dynamic>     tensor_matrix;
         //typedef disk::diffusion<RealType,2>                solution_type;
-        typedef disk::circular_tuyau<RealType,2>                solution_type;
+        typedef disk::tuyau<RealType,2>                solution_type;
         typedef variable2<mesh_type>                            variable_type;
         typedef plasticity2_problem<mesh_type, variable_type>   problem_type;
 
         //std:: string root = "circular/test/";
         //std:: string root = "circular/borrar/Method2/";
-        std:: string root = "circular/trash/";
+        std:: string root = "circular/trash/prueba/";
         //std:: string root = "circular/Meeting7/Diffusion/";
         //std::string root = "square/21_GAUSS_PTS/PER01"
         //std::string root = "square/12_MARKER_4/PER01/5734"

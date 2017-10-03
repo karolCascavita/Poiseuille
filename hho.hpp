@@ -467,6 +467,44 @@ public:
 
         return ret;
     }
+    template<typename Function>
+    vector_type
+    compute_face(const mesh_type& msh, const cell_type& cl,
+                    const face_type & fc, const Function& f)
+    {
+        //if(mp.diff)
+        auto number = set_cell_number(msh, cl);
+
+        matrix_type mm = matrix_type::Zero(face_basis.size(), face_basis.size());
+        vector_type rhs = vector_type::Zero(face_basis.size());
+
+        auto face_quadpoints = face_quadrature.integrate(msh, fc);
+        for (auto& qp : face_quadpoints)
+        {
+            auto phi = face_basis.eval_functions(msh, fc, qp.point());
+            auto fval = f(qp.point(), number);
+
+#ifdef FILL_COLMAJOR
+            for (size_t j = 0; j < phi.size(); j++)
+            {
+                for (size_t i = 0; i < phi.size(); i++)
+                    mm(i,j) += qp.weight() * mm_prod(phi[i], phi[j]);
+
+                rhs(j) += qp.weight() * mm_prod(fval, phi[j]);
+            }
+#else
+            for (size_t i = 0; i < phi.size(); i++)
+            {
+                for (size_t j = 0; j < phi.size(); j++)
+                    mm(i,j) += qp.weight() * mm_prod(phi[i], phi[j]);
+
+                rhs(i) += qp.weight() * mm_prod(fval, phi[i]);
+            }
+#endif
+        }
+        return mm.llt().solve(rhs);
+    }
+
 };
 
 

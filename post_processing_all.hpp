@@ -435,6 +435,217 @@ public:
         }
         return;
     }
+
+    double dot(const point_type& p1, const point_type& p2)
+    {
+        return p1.x()*p2.x() + p1.y()*p2.y();
+    }
+
+    double distance(const point_type& p1, const point_type& p2)
+    {
+        return sqrt(dot(p1, p2));
+    }
+    bool is_inside(const mesh_type& msh, const cell_type & cl, const point_type& pt)
+    {
+        auto pts = points(msh, cl);
+        auto vts = msh.get_vertices(cl, pts);
+
+        if(vts.size() > 3)
+            throw std::invalid_argument("Extend is_inside for other polygons.");
+
+        auto v0 = vts[1] - vts[0];
+        auto v1 = vts[2] - vts[0];
+        auto v2 = pt - vts[0];
+
+        auto dot00 = dot(v0, v0);
+        auto dot01 = dot(v0, v1);
+        auto dot02 = dot(v0, v2);
+        auto dot11 = dot(v1, v1);
+        auto dot12 = dot(v1, v2);
+
+        auto invDenom = 1. / (dot00 * dot11 - dot01 * dot01);
+        auto u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+        auto v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+
+        /* The threshold we're discussing this afternoon may be needed here */
+        //return (u >= 0) && (v >= 0) && (u + v <= 1);
+        /* The threshold we're discussing this afternoon may be needed here */
+        bool upos  = (std::abs(u) < 1.e-5 * invDenom) || ( u > T(0));
+        bool vpos  = (std::abs(v) < 1.e-5 * invDenom) || ( v > T(0));
+        bool uvpos = (std::abs(u + v - 1.) < 1.e-10) || (u + v < 1.);
+
+        return (upos && vpos && uvpos);
+    }
+
+    // Copyright 2000 softSurfer, 2012 Dan Sunday
+    // This code may be freely used and modified for any purpose
+    // providing that this copyright notice is included with it.
+    // SoftSurfer makes no warranty for this code, and cannot be held
+    // liable for any real or imagined damage resulting from its use.
+    // Users of this code must verify correctness for their application.
+
+
+    // a Point is defined by its coordinates {int x, y;}
+    //===================================================================
+
+
+    // isLeft(): tests if a point is Left|On|Right of an infinite line.
+    //    Input:  three points P0, P1, and P2
+    //    Return: >0 for P2 left of the line through P0 and P1
+    //            =0 for P2  on the line
+    //            <0 for P2  right of the line
+    //    See: Algorithm 1 "Area of Triangles and Polygons"
+    int
+    isLeft( const point_type& P0, const point_type& P1, const point_type& P2 )
+    {
+
+        int ret = ( (P1.x() - P0.x()) * (P2.y() - P0.y())
+                - (P2.x() -  P0.x()) * (P1.y() - P0.y()) );
+
+        std::cout << "P0: "<< P0.x() << P0.x()<< std::endl;
+        std::cout << "P1: "<< P1.x() << P1.x()<< std::endl;
+        std::cout << "P2: "<< P2.x() << P2.x()<< std::endl;
+
+        std::cout << " is_Left_inside number : "<< ret << std::endl;
+        return ret;
+    }
+    //===================================================================
+
+
+    // cn_PnPoly(): crossing number test for a point in a polygon
+    //      Input:   P = a point,
+    //               V[] = vertex points of a polygon V[n+1] with V[n]=V[0]
+    //      Return:  0 = outside, 1 = inside
+    // This code is patterned after [Franklin, 2000]
+    auto
+    cn_PnPoly( const point_type  & P, const std::vector<point_type>& vts, const int n )
+    {
+        auto V = vts;
+        V.push_back(vts.at(0));
+
+        int    cn = 0;    // the  crossing number counter
+
+        // loop through all edges of the polygon
+        for (int i = 0; i < n; i++)
+        {
+            // edge from V[i]  to V[i+1]
+           if ( ((V[i].y() <= P.y()) && (V.at(i+1).y() > P.y() ))     // an upward crossing
+                    || ((V.at(i).y() > P.y()) && (V.at(i+1).y() <=  P.y() )))
+            {
+                // a downward crossing
+                // compute  the actual edge-ray intersect x-coordinate
+                T vt = (P.y()  - V.at(i).y()) / (V.at(i+1).y() - V.at(i).y());
+                if (P.x() <  V.at(i).x() + vt * (V.at(i+1).x() - V.at(i).x() )) // P.x < intersect
+                     ++cn;   // a valid crossing of y=P.y right of P.x
+            }
+        }
+        return (cn&1);    // 0 if even (out), and 1 if  odd (in)
+    }
+    //===================================================================
+
+
+    // wn_PnPoly(): winding number test for a point in a polygon
+    //      Input:   P = a point,
+    //               V[] = vertex points of a polygon V[n+1] with V[n]=V[0]
+    //      Return:  wn = the winding number (=0 only when P is outside)
+    bool
+    wn_PnPoly( const point_type& P, const std::vector<point_type>& vts )
+    {
+        auto V = vts;
+        V.push_back(vts.at(0));
+
+        int    wn = 0;    // the  winding number counter
+
+        // loop through all edges of the polygon
+        for (int i = 0 ; i < vts.size(); i++)
+        {   // edge from V[i] to  V[i+1]
+            if (V.at(i).y() <= P.y() )
+            {          // start y <= P.y
+                if (V.at(i+1).y()  > P.y())      // an upward crossing
+                {
+                    std::cout << "***********  edge : "<< i <<"********** "<< std::endl;
+                    int number = isLeft( V.at(i), V.at(i+1), P);
+                    std::cout << "* upward crossing : "<<number  << std::endl;
+                    if (number > 0)  // P left of  edge
+                    {
+                        std::cout << "** valid up intersect--------------------------" << std::endl;
+                        ++wn;
+                    }               // have  a valid up intersect
+                }
+            }
+            else
+            {
+                // start y > P.y (no test needed)
+                if (V.at(i+1).y()  <= P.y())     // a downward crossing
+                {
+                    std::cout << "***********  edge : "<< i <<"********** "<< std::endl;
+                    int number = isLeft( V.at(i), V.at(i+1), P);
+                    std::cout << "* downward crossing : " << number<<std::endl;
+                    if (number < 0)  // P right of  edge
+                    {
+                        std::cout << "** valid down intersect-----------------------" << std::endl;
+                        --wn;
+                    }               // have  a valid down intersect
+                }
+            }
+            std::cout << "wn = "<< wn << std::endl;
+        }
+        if(wn != 0)
+            return true;
+        return false;
+    }
+    plot_over_line(const mesh_type    & msh,
+                   //const point_type   & p1,
+                   //const point_type   & p2,
+                   const std::vector<vector_type>   & rec_vel_Th,
+                   const std::string & filename)
+    {
+        std::ofstream pfs(filename);
+        if(pfs.is_open())
+            std::cout << "Error opening file :"<< filename <<std::endl;
+
+        point_type p1 = point_type({-1.0, 0.0});
+        point_type p2 = point_type({ 1.0, 0.0});
+
+        auto N = 100;
+        auto h = (p2 - p1)/N;
+        size_t i = 0 ;
+        auto pts = std::vector<point_type>(N);
+        for(auto& p: pts)
+        {
+            p = p1 + i * h;
+
+            for(auto cl: msh)
+            {
+                auto cell_pts = points(msh, cl);
+                auto vts = msh.get_vertices(cl, cell_pts);
+                if(is_inside(msh, cl, p))
+                {
+                    std::cout << "cn_PPoly answer :" << wn_PnPoly( p, vts) << std::endl;
+
+                    auto cl_id  = cl.get_id();
+                    vector_type ruh = rec_vel_Th.at(cl_id);
+
+                    auto rec_fun =  [&](const point_type& pt) -> scalar_type
+                    {
+                        scalar_type ret(0);
+
+                        auto phi  = cb.eval_functions(msh, cl, pt);
+
+                        for(size_t i = 0; i < cb.size(); i++)
+                            ret  += phi.at(i) * ruh(i); //uTF_acst(i);
+
+                        return ret;
+                    };
+                    pfs<< p.x() << " "<< p.y() << " "<< rec_fun(p)<<std::endl;
+                }
+            }
+            i++;
+        }
+        pfs.close();
+        return;
+    }
+
 };
 
 
@@ -455,7 +666,8 @@ postprocess(const  mesh<T,DIM,Storage>&  msh,
             const std::vector<dynamic_vector<T>> & velocity_Th,
             const std::vector<dynamic_matrix<T>> & reconstruction_opers,
             const mesh_parameters<T>  &  mp,
-            const size_t     degree)
+            const size_t     degree,
+            const size_t     imsh)
 
 {
     typedef dynamic_vector<T> vector_type;
@@ -480,8 +692,8 @@ postprocess(const  mesh<T,DIM,Storage>&  msh,
         rec_vel_Th.at(cl_id) = rec;
     }
 
-    //std::string  msh_str = tostr(imsh);
-    auto info =  mp.summary; //+ "_R" + msh_str;
+    std::string  msh_str = tostr(imsh);
+    std::string  info =  mp.summary + "_R" + msh_str;
 
     std::string solution_file  = mp.directory + "/solution" + info;
     std::string gradient_file  = mp.directory + "/gradient" + info;
@@ -490,6 +702,13 @@ postprocess(const  mesh<T,DIM,Storage>&  msh,
     pp.paraview(msh, solution_file, degree, rec_vel_Th,  "scalar");
     pp.paraview(msh, gradient_file, degree, grad_rec_Th, "vector");
     pp.paraview(msh, stresses_file, degree, stresses_Th.at_all_cells(), "vector");
+
+    std::string plotoline_file  = mp.directory + "/plot_over_line_sol" + info;
+    pp.plot_over_line(msh, rec_vel_Th, plotoline_file);
+
+    save_data(velocity_Th, mp.directory + "/velocities" + info + ".txt");
+    save_data(stresses_Th, mp.directory + "/multiplier" + info + ".txt");
+
 
     auto exfunc_name = mp.directory + "/exFunction.m";
 
@@ -522,9 +741,8 @@ postprocess(const  mesh<T,DIM,Storage>&  msh,
     effs << "   print -dpng name" <<std::endl;
     effs << "end"<<std::endl;
     effs.close();
+
 }
-
-
 template<typename MeshParameters, typename PlasticData>
 void
 execute(std::ofstream & exfs,
@@ -535,22 +753,24 @@ execute(std::ofstream & exfs,
     if(imsh > 0)
     {
         exfs<< "if draw_estimator == true"<<std::endl;
-        exfs<< "figure;estimator_tot"<<mp.summary<<"_RC"<<imsh<<";";
-        exfs<< "if print_estimator == true;";
-        exfs<< "set(gca,'box','on'); set(gcf,'color','w');set(gca,'fontsize',12);"<<std::endl;
-        exfs<< "circle(0,0,"<<pst.Bn<<",'w')"<<std::endl;
-        exfs<< "print('-depsc2', '-loose', 'estimator_tot"<<mp.summary<<"_RC"<<imsh<<".eps')"<<std::endl;
-        exfs<< "figure;estimator_res"<<mp.summary<<"_RC"<<imsh<<";";
-        exfs<< "if print_estimator == true;";
-        exfs<< "set(gca,'box','on'); set(gcf,'color','w');set(gca,'fontsize',12);"<<std::endl;
-        exfs<< "circle(0,0,"<<pst.Bn<<",'w')"<<std::endl;
-        exfs<< "print('-depsc2', '-loose', 'estimator_res"<<mp.summary<<"_RC"<<imsh<<".eps')"<<std::endl;
-        exfs<< "figure;estimator_str"<<mp.summary<<"_RC"<<imsh<<";";
-        exfs<< "if print_estimator == true;";
-        exfs<< "set(gca,'box','on'); set(gcf,'color','w');set(gca,'fontsize',12);"<<std::endl;
-        exfs<< "circle(0,0,"<<pst.Bn<<",'w')"<<std::endl;
-        exfs<< "print('-depsc2', '-loose', 'estimator_str"<<mp.summary<<"_RC"<<imsh<<".eps')"<<std::endl;
-        exfs<< " end;"<<std::endl;
+        exfs<< "    figure;estimator_tot"<<mp.summary<<"_RC"<<imsh<<";";
+        exfs<< "    if print_estimator == true;";
+        exfs<< "        set(gca,'box','on'); set(gcf,'color','w');set(gca,'fontsize',12);"<<std::endl;
+        exfs<< "        circle(0,0,"<<pst.Bn<<",'w')"<<std::endl;
+        exfs<< "        print('-depsc2', '-loose', 'estimator_tot"<<mp.summary<<"_RC"<<imsh<<".eps')"<<std::endl;
+        exfs<< "    end;"<<std::endl;
+        exfs<< "    figure;estimator_res"<<mp.summary<<"_RC"<<imsh<<";";
+        exfs<< "    if print_estimator == true;";
+        exfs<< "        set(gca,'box','on'); set(gcf,'color','w');set(gca,'fontsize',12);"<<std::endl;
+        exfs<< "        circle(0,0,"<<pst.Bn<<",'w')"<<std::endl;
+        exfs<< "        print('-depsc2', '-loose', 'estimator_res"<<mp.summary<<"_RC"<<imsh<<".eps')"<<std::endl;
+        exfs<< "    end;"<<std::endl;
+        exfs<< "    figure;estimator_str"<<mp.summary<<"_RC"<<imsh<<";";
+        exfs<< "    if print_estimator == true;";
+        exfs<< "        set(gca,'box','on'); set(gcf,'color','w');set(gca,'fontsize',12);"<<std::endl;
+        exfs<< "        circle(0,0,"<<pst.Bn<<",'w')"<<std::endl;
+        exfs<< "        print('-depsc2', '-loose', 'estimator_str"<<mp.summary<<"_RC"<<imsh<<".eps')"<<std::endl;
+        exfs<< "    end;"<<std::endl;
         exfs<< "end"<<std::endl;
     }
 

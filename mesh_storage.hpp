@@ -102,6 +102,7 @@ struct mesh_storage<T, 2, ElementTypes>
     std::vector<bnd_info>                       boundary_info;
     std::vector<bool>                           boundary_edges;
     std::vector<std::pair<bool, std::vector<point_id_type>>>  special_surfaces;
+    std::vector<std::pair<int,int>>             edges_owners;
     void statistics(void) const
     {
         std::cout << "This is a storage for a 2D mesh" << std::endl;
