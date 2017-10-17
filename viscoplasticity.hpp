@@ -296,11 +296,12 @@ public:
     void
     zero_vector(const mesh_type msh, const size_t& degree)
     {
-        CellBasisType cell_basis(degree + 1);
+        CellBasisType cell_basis(degree);
         FaceBasisType face_basis(degree);
 
-        size_t num_cell_dofs = cell_basis.range(1, degree+1).size();
-        size_t num_face_dofs = face_basis.range(0, degree).size();
+        auto DIM = mesh_type::dimension;
+        size_t num_cell_dofs = DIM * cell_basis.size();
+        size_t num_face_dofs = face_basis.size();
 
         cell_tensor_vector = vec_vec_type(msh.cells_size());
         c_face_tensor_vector = vec_mat_type(msh.cells_size());
@@ -310,7 +311,7 @@ public:
             auto fcs = faces(msh, cl);
             auto num_faces = number_of_faces(msh, cl);
             auto id = cl.get_id();
-            cell_tensor_vector.at(id)  =  vector_type::Zero(num_cell_dofs);
+            cell_tensor_vector.at(id)   = vector_type::Zero(num_cell_dofs);
             c_face_tensor_vector.at(id) = matrix_type::Zero(num_face_dofs, num_faces);
         }
 
@@ -432,7 +433,7 @@ class plasticity2
     plasticity_data<T>          pst;
     size_t                      m_degree;
     T                           m_method_coef;
-    std::vector<matrix_type>    m_reconstruction_opers;
+    std::vector<matrix_type>    m_gradrec_opers;
     std::vector<matrix_type>    m_stabilization_opers;
 
 public:
@@ -444,15 +445,15 @@ public:
     {}
     plasticity2(const size_t& degree,
                 const plasticity_data<T>& pst_data,
-                const std::vector<matrix_type>& reconstruction_opers,
+                const std::vector<matrix_type>& gradrec_opers,
                 const std::vector<matrix_type>& stabilization_opers):
                 pst(pst_data),
                 m_degree(degree),
-                m_reconstruction_opers(reconstruction_opers),
+                m_gradrec_opers(gradrec_opers),
                 m_stabilization_opers(stabilization_opers)
                 //WK: for mu as tensor one should check this part
     {
-        cell_basis  =  cell_basis_type(m_degree + 1); // This is k + 1  just if I want to use \nabla r^{k + 1}
+        cell_basis  =  cell_basis_type(m_degree); // This would be k + 1  just if I want to use \nabla r^{k + 1}
         face_basis  =  face_basis_type(m_degree);
 
         cell_quadrature  = cell_quadrature_type(2 * degree + 2);
@@ -474,36 +475,35 @@ public:
         for(auto& cl:msh)
         {
             auto id     = msh.lookup(cl);
-            vector_type vel_TF   = velocity.at(id);
-            vector_type dphi_ruh  = grad_rec_uTF(msh, cl, vel_TF);
-            vector_type gamma     = m_decoupled_var.at_cell(msh, cl);
-            vector_type old_sigma = mtp.at_cell(msh, cl);
-            vector_type sigma = old_sigma + pst.alpha * ( dphi_ruh - gamma );
+            vector_type vel_TF     = velocity.at(id);
+            vector_type Gt_uT      = grad_rec_uTF(msh, cl, vel_TF );
+            vector_type gamma      = m_decoupled_var.at_cell(msh, cl);
+            vector_type old_sigma  = mtp.at_cell(msh, cl);
+            vector_type diff_sigma = pst.alpha * ( Gt_uT - gamma );
+            vector_type sigma      = old_sigma + diff_sigma;
 
             //Updating mtp in the cell
             mtp.save(msh, cl, sigma);
 
             //Error computation for sigma (cell)
-            vector_type diff_sigma = sigma - old_sigma;
-            matrix_type stiff_mat  = matrix_type::Zero(cell_basis.size(), cell_basis.size());
+            auto DIM = mesh_type::dimension;
+            auto cbs = cell_basis.size();
+            auto vec_cbs = DIM * cell_basis.size();
 
-            auto one_range = cell_basis.range(1, m_degree+1);
-            auto row_range = disk::dof_range( 0, mesh_type::dimension);
+
+            matrix_type mass_mat  = matrix_type::Zero(vec_cbs, vec_cbs);
+
+            auto row_range = disk::dof_range( 0, DIM);
             auto cell_quadpoints   = cell_quadrature.integrate(msh, cl);
             for (auto& qp : cell_quadpoints)
             {
-                auto c_dphi = cell_basis.eval_gradients(msh, cl, qp.point());
-                matrix_type c_dphi_0 = make_gradient_matrix(c_dphi, row_range, one_range);
+                auto c_phi = cell_basis.eval_functions(msh, cl, qp.point());
+                matrix_type vec_phi = make_vectorial_matrix(c_phi, DIM);
 
-                for (size_t i = 0; i < cell_basis.size(); i++)
-                    for (size_t j = 0; j < cell_basis.size(); j++)
-                        stiff_mat(i,j) += qp.weight() * mm_prod(c_dphi[i], c_dphi[j]);
+                mass_mat += qp.weight() * vec_phi.transpose() * vec_phi;
             }
 
-            auto MG_rowcol_range = cell_basis.range(1, m_degree+1);
-            matrix_type MG = take(stiff_mat, MG_rowcol_range, MG_rowcol_range);
-
-            error.sigma += diff_sigma.transpose() * MG * diff_sigma;
+            error.sigma += diff_sigma.transpose() * mass_mat * diff_sigma;
 
             // Updating mtp on the faces
             auto fbs = face_basis.size();
@@ -515,19 +515,16 @@ public:
             {
                 vector_type STF_u = stab_oper(msh, cl, fc) * vel_TF ;
                 vector_type Psi   = m_decoupled_var.at_face(msh, cl, fc);
-                vector_type old_varsigma = mtp.at_face(msh, cl, fc);
-                vector_type varsigma =  old_varsigma + pst.alpha * ( STF_u - Psi );
-                vector_type diff_varsigma = varsigma - old_varsigma ;
+                vector_type old_varsigma  = mtp.at_face(msh, cl, fc);
+                vector_type diff_varsigma = pst.alpha * ( STF_u - Psi );
+                vector_type varsigma =  old_varsigma + diff_varsigma;
 
                 //Error computation for varsigma (cells)
                 auto face_quadpoints = face_quadrature.integrate(msh, fc);
                 for (auto& qp : face_quadpoints)
                 {
                     auto f_phi = face_basis.eval_functions(msh, fc, qp.point());
-
-                    for (size_t i = 0; i < face_basis.size(); i++)
-                        for (size_t j = 0; j < face_basis.size(); j++)
-                            face_mass_mat(i,j)  += qp.weight() * mm_prod(f_phi[i], f_phi[j]);
+                    face_mass_mat  += qp.weight() * f_phi * f_phi.transpose();
                 }
 
                 error.varsigma += diff_varsigma.transpose() * face_mass_mat * diff_varsigma;
@@ -551,32 +548,27 @@ public:
         matrix_type   face_mass_matrix = matrix_type::Zero(fbs, fbs);
         vector_type   lhs_vec = vector_type::Zero(fbs);
 
+        auto pts = points(msh, cl);
+        auto vts = msh.get_vertices(cl, pts);
+        auto h   = diameter(msh, /*fcs[face_i]*/vts);
+
         auto face_quadpoints = face_quadrature.integrate(msh, fc);
         for (auto& qp : face_quadpoints)
         {
             auto f_phi = face_basis.eval_functions(msh, fc, qp.point());
 
-            for (size_t i = 0; i < face_basis.size(); i++)
-            {
-                for (size_t j = 0; j < face_basis.size(); j++)
-                    face_mass_matrix(i,j)  += qp.weight() * mm_prod(f_phi[i], f_phi[j]);
+            face_mass_matrix  += qp.weight() * f_phi * f_phi.transpose();
 
-                vector_type f_phi_vec = vector_type::Zero(fbs);
-                for(size_t j = 0; j < fbs; j++)
-                    f_phi_vec(j) = f_phi[j];
+            // Eval point-wise gamma function at test points
+            vector_type theta = varsigma  +  pst.alpha * STF_u / h ;
+            T     theta_eval  =  f_phi.dot(theta);
+            auto  theta_eval_norm  =  theta_eval;
 
-                // Eval point-wise gamma function at test points
-                vector_type theta = varsigma  +  pst.alpha * STF_u;
-                T     theta_eval =  f_phi_vec.dot(theta);
-                auto  theta_eval_norm  =  theta_eval;
-
-                T Psi_eval = T(0);
-                if(theta_eval_norm > pst.yield)
-                    Psi_eval = m_method_coef * (theta_eval_norm - pst.yield) *
-                                                    (theta_eval / theta_eval_norm);
-
-                lhs_vec(i,0) += qp.weight() * f_phi[i] * Psi_eval;
-            }
+            T Psi_eval = T(0);
+            if(theta_eval_norm > pst.yield)
+                Psi_eval = m_method_coef * (theta_eval_norm - pst.yield) *
+                                                (theta_eval / theta_eval_norm);
+            lhs_vec += qp.weight() * f_phi * Psi_eval;
         }
 
         //Recover Psi function: DOFs in  P^(k)_(d-1)
@@ -591,50 +583,42 @@ public:
                   const vector_type& velocity)
     {
         auto id = msh.lookup(cl);
-        vector_type dphi_ruh  = grad_rec_uTF(msh, cl, velocity);
+        vector_type Gt_uT  = grad_rec_uTF(msh, cl, velocity);
 
-        // We use a degree less since we need the number of points for dim(D P^k+1)
         auto DIM = mesh_type::dimension;
-        auto one_range = cell_basis.range(1, m_degree+1);
         auto row_range = disk::dof_range( 0, DIM);
-
+        auto cbs = cell_basis.size();
+        auto vec_cbs = DIM * cell_basis.size();
         size_t i = 0;
 
-        vector_type lhs_vec   = vector_type::Zero(one_range.size());
-        matrix_type stiff_mat = matrix_type::Zero(cell_basis.size(), cell_basis.size());
+        vector_type lhs_vec    = vector_type::Zero(vec_cbs);
+        matrix_type mass_mat   = matrix_type::Zero(vec_cbs, vec_cbs);
 
         auto cell_quadpoints = cell_quadrature.integrate(msh, cl);
         for (auto& qp : cell_quadpoints)
         {
-            auto c_dphi = cell_basis.eval_gradients(msh, cl, qp.point());
-            matrix_type c_dphi_0   = make_gradient_matrix(c_dphi, row_range, one_range);
+            auto c_phi = cell_basis.eval_functions(msh, cl, qp.point());
+            matrix_type vec_phi = make_vectorial_matrix(c_phi, DIM);
 
-            for (size_t i = 0; i < cell_basis.size(); i++)
-                for (size_t j = 0; j < cell_basis.size(); j++)
-                    stiff_mat(i,j) += qp.weight() * mm_prod(c_dphi[i], c_dphi[j]);
+            mass_mat += qp.weight() * vec_phi.transpose() * vec_phi;
 
-            for (size_t i = 0; i < one_range.size(); i++)
+            // Eval point-wise gamma function at test points
+            vector_type theta      = sigma  +  pst.alpha * Gt_uT;
+            vector_type theta_eval = vec_phi * theta;
+            auto  theta_eval_norm  = theta_eval.norm();
+
+            vector_type gamma_eval = vector_type::Zero(mesh_type::dimension);
+            if(theta_eval_norm > pst.yield)
             {
-                // Eval point-wise gamma function at test points
-                vector_type theta      = sigma  +  pst.alpha * dphi_ruh;
-                vector_type theta_eval = c_dphi_0 * theta;
-                auto  theta_eval_norm  = theta_eval.norm();
-
-                vector_type gamma_eval = vector_type::Zero(mesh_type::dimension);
-                if(theta_eval_norm > pst.yield)
-                    gamma_eval = m_method_coef * (theta_eval_norm - pst.yield) *
+                gamma_eval = m_method_coef * (theta_eval_norm - pst.yield) *
                                                     (theta_eval / theta_eval_norm);
-                vector_type c_dphi_i =  c_dphi_0.col(i);
-                lhs_vec(i,0) += qp.weight() * c_dphi_i.dot(gamma_eval);
             }
+            lhs_vec += qp.weight() * vec_phi.transpose() * gamma_eval;
+
         }
 
-        /* LHS: take basis functions derivatives from degree 1 to K+1 */
-        auto MG_rowcol_range = cell_basis.range(1, m_degree+1);
-        matrix_type MG = take(stiff_mat, MG_rowcol_range, MG_rowcol_range);
-
-        //Recover gamma function: DOFs in \nabla P^(k+1)
-        vector_type gamma = MG.ldlt().solve(lhs_vec);
+        //Recover gamma function: DOFs in  [P^k]^d
+        vector_type gamma = mass_mat.ldlt().solve(lhs_vec);
         m_decoupled_var.save( msh, cl, gamma);
 
         return;
@@ -689,29 +673,29 @@ public:
                           const tensors_type & multiplier)
     {
 
+
         auto cell_quadpoints = cell_quadrature.integrate(msh, cl);
 
-        vector_type new_sigma = vector_type::Zero(cell_quadpoints.size());
-        matrix_type stiff_mat = matrix_type::Zero(cell_basis.size(), cell_basis.size());
+        auto DIM = mesh_type::dimension;
+        auto cbs = cell_basis.size();
+        auto vec_cbs = DIM * cell_basis.size();
 
-        vector_type sigma = multiplier.at_cell( msh, cl );
-        vector_type gamma = m_decoupled_var.at_cell( msh, cl );
+        matrix_type mass_mat = matrix_type::Zero(vec_cbs, vec_cbs);
+        vector_type sigma   = multiplier.at_cell( msh, cl );
+        vector_type gamma   = m_decoupled_var.at_cell( msh, cl );
 
         for (auto& qp : cell_quadpoints)
         {
-            auto c_dphi = cell_basis.eval_gradients(msh, cl, qp.point());
-            for (size_t i = 0; i < cell_basis.size(); i++)
-                for (size_t j = 0; j < cell_basis.size(); j++)
-                    stiff_mat(i,j) += qp.weight() * mm_prod(c_dphi[i], c_dphi[j]);
+            auto c_phi = cell_basis.eval_functions(msh, cl, qp.point());
+            matrix_type vec_phi = make_vectorial_matrix(c_phi, DIM);
+
+            mass_mat += qp.weight() * vec_phi.transpose() * vec_phi;
         }
 
-        /* LHS: take basis functions derivatives from degree 1 to K+1 */
         auto id = msh.lookup(cl);
 
-        auto MG_rowcol_range = cell_basis.range(1, m_degree+1);
-        matrix_type MG  = take(stiff_mat, MG_rowcol_range, MG_rowcol_range);
-        matrix_type rec_oper = m_reconstruction_opers.at(id);
-        matrix_type RMG = rec_oper.transpose() * MG;
+        matrix_type rec_oper = m_gradrec_opers.at(id);
+        matrix_type RMG = rec_oper.transpose() * mass_mat;
 
         return RMG * (sigma - pst.alpha * gamma);
     }
@@ -745,12 +729,8 @@ public:
             for (auto& qp : face_quadpoints)
             {
                 auto f_phi = face_basis.eval_functions(msh, fc, qp.point());
-                auto c_phi = cell_basis.eval_functions(msh, cl, qp.point());
 
-                for (size_t i = 0; i < face_basis.size(); i++)
-                    for (size_t j = 0; j < face_basis.size(); j++)
-                        face_mass_matrix(i,j)  += qp.weight() * mm_prod(f_phi[i], f_phi[j]);
-
+                face_mass_matrix  += qp.weight() * f_phi * f_phi.transpose();
             }
 
             vector_type varsigma = multiplier.at_face(msh, cl, fc);
@@ -763,7 +743,7 @@ public:
         return ret;
     }
 
-
+    #if 0
     vector_type
     grad_rec_uTF_eval( const point<T,2>& pt, //Check for this to be generalized to other dimensions.
                    const mesh_type&  msh,
@@ -771,7 +751,7 @@ public:
                    const vector_type& u_TF)
     {
         auto id = cl.get_id();
-        matrix_type  rec_op = m_reconstruction_opers.at(id);
+        matrix_type  rec_op = m_gradrec_opers.at(id);
 
         auto col_range      = cell_basis.range(1,m_degree+1);
         auto row_range      = disk::dof_range( 0,mesh_type::dimension);
@@ -782,6 +762,7 @@ public:
 
         return dphi_ruh;
     }
+
     std::pair<vector_type, vector_type>
     grad_uh_eval( const point<T,2>& pt, //Check for this to be generalized to other dimensions.
                    const mesh_type&  msh,
@@ -789,7 +770,7 @@ public:
                    const vector_type& u_TF)
     {
         auto id = msh.lookup(cl);
-        matrix_type  rec_op = m_reconstruction_opers.at(id);
+        matrix_type  rec_op = m_gradrec_opers.at(id);
 
         auto col_range = cell_basis.range(1,m_degree+1);
         auto row_range = disk::dof_range( 0,mesh_type::dimension);
@@ -807,6 +788,28 @@ public:
 
         return std::make_pair(dphi_ruh, dphi_uh_T);
     }
+    #endif
+
+    vector_type
+    grad_rec_uTF_eval( const point<T,2>& pt, //Check for this to be generalized to other dimensions.
+                   const mesh_type&  msh,
+                   const cell_type&  cl,
+                   const vector_type& u_TF)
+    {
+        auto id = cl.get_id();
+        matrix_type  grec_op = m_gradrec_opers.at(id);
+        auto zero_mindeg = 0;
+        auto zero_maxdeg = m_degree;
+
+        auto col_range      = cell_basis.range(zero_mindeg, zero_maxdeg);
+        auto row_range      = disk::dof_range( 0,mesh_type::dimension);
+
+        auto c_phi   = cell_basis.eval_functions(msh, cl, pt);
+        matrix_type vec_phi = make_vectorial_matrix(c_phi, mesh_type::dimension);
+        vector_type G_uT    = vec_phi * grec_op * u_TF;
+
+        return G_uT;
+    }
 
     vector_type
     grad_rec_uTF(  const mesh_type  &  msh,
@@ -817,8 +820,8 @@ public:
         // are still working with only D P^(k+1), i.e, we havent specified
         // the mean value
         auto id = msh.lookup(cl);
-        matrix_type  rec_oper = m_reconstruction_opers.at(id);
-        return rec_oper * u_TF;
+        matrix_type  grec_oper = m_gradrec_opers.at(id);
+        return grec_oper * u_TF;
     }
 
     matrix_type
@@ -829,7 +832,7 @@ public:
         auto cl_id = msh.lookup(cl);
         auto pos = face_position(msh, cl, fc);
         auto fbs = face_basis.size();
-        auto cbs = cell_basis.range(0, m_degree+0).size();
+        auto cbs = cell_basis.range(0, m_degree).size();
         auto num_faces = number_of_faces(msh, cl);
         auto num_total_dofs = cbs + fbs * num_faces;
 

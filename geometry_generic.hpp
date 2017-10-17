@@ -308,6 +308,7 @@ diameter(const Mesh& msh, const std::vector<typename Mesh::point_type>& pts)
     return diam;
 }
 
+#if 0
 /* Compute the barycenter of a 2-face */
 template<typename T>
 point<T,2>
@@ -317,6 +318,25 @@ barycenter(const generic_mesh<T,2>& msh, const typename generic_mesh<T,2>::face&
     assert(pts.size() == 2);
     auto bar = (pts[0] + pts[1]) / T(2);
     return bar;
+}
+
+template<typename Mesh, typename Element>
+point<typename Mesh::coordinate_type, Mesh::dimension>
+barycenter(const Mesh& msh, const Element& elm)
+{
+    auto pts = points(msh, elm);
+    auto bar = std::accumulate(std::next(pts.begin()), pts.end(), pts.front());
+    return bar / typename Mesh::coordinate_type( pts.size() );
+}
+#endif
+
+template<typename Mesh, typename Element>
+point<typename Mesh::scalar_type, Mesh::dimension>
+barycenter(const Mesh& msh, const Element& elm)
+{
+    auto pts = points(msh, elm);
+    auto bar = std::accumulate(std::next(pts.begin()), pts.end(), pts.front());
+    return bar / typename Mesh::scalar_type( pts.size() );
 }
 
 template<typename T>

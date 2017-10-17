@@ -513,7 +513,7 @@ public:
 
         return this->backend_storage()->boundary_edges.at(e.second);
     }
-
+    #if 0
     auto boundary_info(const face& f) const
     {
         auto e = find_element_id(faces_begin(), faces_end(), f);
@@ -522,7 +522,7 @@ public:
 
         return this->backend_storage()->boundary_info.at(e.second);
     }
-
+    #endif
     bool is_boundary(const face_iterator& itor) const
     {
         auto ofs = std::distance(faces_begin(), itor);
@@ -619,6 +619,17 @@ public:
                           this->backend_storage()->boundary_nodes.end(),
                           false);
     }
+
+    #if 0
+    auto boundary_info(const face& f) const
+    {
+        auto e = find_element_id(faces_begin(), faces_end(), f);
+        if (e.first == false)
+            throw std::invalid_argument("Cell not found");
+        auto  ret = int(0);
+        return ret;
+    }
+    #endif
 };
 
 } // namespace priv

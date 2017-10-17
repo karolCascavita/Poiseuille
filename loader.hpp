@@ -380,10 +380,12 @@ private:
             }
         );
         m_index_transf = index;
+        #if  0
         std::cout << "INDEX_TRANSF:" << std::endl;
         for(auto& id: index)
             std::cout << id<<"  ";
         std::cout<< std::endl;
+        #endif
     }
     std::pair<bool, std::vector<typename point_type::id_type>>
     is_special_polygon(const mesh_type& msh, const surface_type& cl)
@@ -464,11 +466,14 @@ private:
 
         return std::make_pair(has_hang_nodes, vertices);
     }
+
     /*Set boundary number*/
+    #if 0
     template<typename EdgeType, typename Storage>
     size_t
     set_bnd_number(const EdgeType& edge, const Storage& storage)
     {
+
         T x0 = 0.5;
         auto pts_ids  = edge.point_ids();
         auto p1   = storage->points.at(pts_ids.at(0));
@@ -479,6 +484,7 @@ private:
         else
             return 2;
     }
+    #endif
     #if 0
     set_neighbors(mesh_type& msh, m_edges, std::vector<surface_type>& surfaces);
     {
@@ -568,7 +574,7 @@ public:
                 return false;
             }
 
-            auto bnd_number = set_bnd_number(edge, storage);
+            auto bnd_number = 0;//set_bnd_number(edge, storage);
             bnd_info bi{bnd_number, true};
             storage->boundary_info.at(position.second)  = bi;
             storage->boundary_edges.at(position.second) = true;
