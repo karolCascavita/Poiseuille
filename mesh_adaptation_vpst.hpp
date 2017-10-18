@@ -728,8 +728,7 @@ proj_rec_solution(const MeshType& new_msh,
 
             auto phi  = cb.eval_functions(old_msh, ancestor_cell, p);
 
-            for(size_t i = 0; i < cb.size(); i++)
-                ret  += phi.at(i) * ruh_acst(i); //uTF_acst(i);
+            ret  += phi.dot(ruh_acst); //uTF_acst(i);
 
             return ret;
         };
@@ -757,66 +756,58 @@ lift_face_stress(const MeshType &msh,
     typedef dynamic_vector<T>       vector_type;
     typedef dynamic_matrix<T>       matrix_type;
 
-    cell_basis_type         cell_basis(m_degree + 1);
+    cell_basis_type         cell_basis(m_degree);
     face_basis_type         face_basis(m_degree);
     cell_quadrature_type    cell_quadrature(2*(m_degree+1));
     face_quadrature_type    face_quadrature(2*m_degree);
 
-    auto one_range = cell_basis.range(1, m_degree+1);
-    vector_type ret = vector_type::Zero(one_range.size());
+    auto num_cell_dofs = cell_basis.range(0, m_degree).size();
+    auto DIM = MeshType::dimension;
+    auto vec_cbs = num_cell_dofs * DIM;
+    matrix_type stiff_mat = matrix_type::Zero(vec_cbs, vec_cbs);
 
-    matrix_type stiff_mat = matrix_type::Zero(cell_basis.size(), cell_basis.size());
+    /* 1 - Lifting of varsgima */
+    auto cell_quadpoints = cell_quadrature.integrate(msh, cell);
+    for (auto& qp : cell_quadpoints)
+    {
+        auto c_phi = cell_basis.eval_functions(msh, cell, qp.point());
+        matrix_type vec_phi = make_vectorial_matrix(c_phi, DIM);
+        stiff_mat += qp.weight() * vec_phi.transpose() * vec_phi;
+    }
 
-        /* 1 - Lifting of varsgima */
-        auto cell_quadpoints = cell_quadrature.integrate(msh, cell);
-        for (auto& qp : cell_quadpoints)
+    /* LHS: take basis functions derivatives from degree 1 to K+1 */
+    auto MG_ldlt = stiff_mat.llt();
+    auto fcs = faces(msh, cell);
+    auto num_faces     = fcs.size();
+    auto num_face_dofs = face_basis.size();
+    auto BG_row_size   = vec_cbs;
+
+    dofspace_ranges dsr(num_cell_dofs, num_face_dofs, num_faces);
+
+    vector_type ret = vector_type::Zero(BG_row_size);
+
+    for (size_t face_i = 0; face_i < num_faces; face_i++)
+    {
+        auto current_face_range = dsr.face_range(face_i);
+        auto fc = fcs[face_i];
+        auto n = normal(msh, cell, fc);
+        auto face_quadpoints = face_quadrature.integrate(msh, fc);
+
+        matrix_type FG = matrix_type::Zero(BG_row_size, num_face_dofs);
+
+        for (auto& qp : face_quadpoints)
         {
-            auto c_dphi = cell_basis.eval_gradients(msh, cell, qp.point());
-            for (size_t i = 0; i < cell_basis.size(); i++)
-                for (size_t j = 0; j < cell_basis.size(); j++)
-                    stiff_mat(i,j) += qp.weight() * mm_prod(c_dphi[i], c_dphi[j]);
+            auto c_phi = cell_basis.eval_functions(msh, cell, qp.point());
+            matrix_type vec_phi = make_vectorial_matrix(c_phi, DIM);
+            // (  w * n , v_F )
+            auto f_phi = face_basis.eval_functions(msh, fc, qp.point());
+            FG += qp.weight() * vec_phi.transpose() * n * f_phi.transpose() ;
         }
-
-        /* LHS: take basis functions derivatives from degree 1 to K+1 */
-        matrix_type MG = take(stiff_mat, one_range, one_range);
-        auto MG_ldlt = MG.llt();
-
-        auto fcs = faces(msh, cell);
-        auto num_faces = fcs.size();
-        auto num_cell_dofs = cell_basis.range(0, m_degree).size();
-        auto num_face_dofs = face_basis.size();
-
-        dofspace_ranges dsr(num_cell_dofs, num_face_dofs, num_faces);
-
-        for (size_t face_i = 0; face_i < num_faces; face_i++)
-        {
-            auto current_face_range = dsr.face_range(face_i);
-            auto fc = fcs[face_i];
-            auto n = normal(msh, cell, fc);
-            auto face_quadpoints = face_quadrature.integrate(msh, fc);
-
-            matrix_type BG = matrix_type::Zero(one_range.size(), num_face_dofs);
-
-            for (auto& qp : face_quadpoints)
-            {
-                auto c_dphi = cell_basis.eval_gradients(msh, cell, qp.point());
-                auto f_phi = face_basis.eval_functions(msh, fc, qp.point());
-
-                for (size_t i = one_range.min(), ii = 0; i < one_range.max(); i++, ii++)
-                {
-                    for (size_t j = 0; j < current_face_range.size(); j++)
-                    {
-                        auto p1 = mm_prod(c_dphi[i], n);
-                        auto p2 = mm_prod(f_phi[j], p1);
-                        BG(ii,j) += qp.weight() * p2;
-                    }
-                }
-            }
-            auto pos = face_position(msh, cell, fc);
-            vector_type f_varsig  = varsigma.col(pos);
-            ret += MG_ldlt.solve(BG) * f_varsig;
-        }
-        return ret;
+        auto  pos = face_position(msh, cell, fc);
+        vector_type f_varsig  = varsigma.col(pos);
+        ret += MG_ldlt.solve(FG) * f_varsig;
+    }
+    return ret;
 }
 
 template<typename Iterator>
@@ -864,7 +855,7 @@ project_stresses(const MeshType & new_msh,
     cell_quadrature_type    cell_quadrature(2*(m_degree+1));
     face_quadrature_type    face_quadrature(2*m_degree);
 
-    projector_nopre<mesh_type,
+    projector_pst<mesh_type,
                         cell_basis_type,
                         cell_quadrature_type,
                         face_basis_type,
@@ -880,8 +871,8 @@ project_stresses(const MeshType & new_msh,
         ret.save(new_msh, cell, sigma);
     }
 
-
-    auto col_range  =   cell_basis.range(1, m_degree+1);
+    auto DIM = MeshType::dimension;
+    auto col_range  =   cell_basis.range(0, m_degree);
     auto row_range  =   dof_range(0, mesh_type::dimension);
 
     for(auto& ancestor_cell : old_msh)
@@ -897,6 +888,7 @@ project_stresses(const MeshType & new_msh,
 
             /* 2- lifting */
             matrix_type  old_varsigma =  mpt.at_element_faces(old_msh, ancestor_cell);
+
             vector_type  lift_dofs = lift_face_stress< mesh_type, T,
                                      cell_basis_type, cell_quadrature_type,
                                      face_basis_type, face_quadrature_type>
@@ -913,13 +905,12 @@ project_stresses(const MeshType & new_msh,
                 {
                     scalar_type ret(0);
 
-                    auto dphi  = cell_basis.eval_gradients(old_msh, ancestor_cell, p);
-                    matrix_type dphi_mat = make_gradient_matrix(dphi, row_range, col_range);
-                    vector_type dpot = dphi_mat * lift_dofs;
+                    auto phi  = cell_basis.eval_functions(old_msh, ancestor_cell, p);
+                    auto vec_phi = make_vectorial_matrix( phi, DIM);
 
-                    return dpot.dot(n);
+                    ret =  n.transpose() * vec_phi * lift_dofs;
+                    return ret;
                 };
-
                 vector_type new_varsigma = projk.compute_face(new_msh, cell,
                                                             fc, lifted_fun);
                 ret.save(new_msh, cell, fc, new_varsigma);
@@ -1100,7 +1091,33 @@ public:
         return;
     }
     bool
-    test_marker(const mesh_type& msh,
+    test_marker_all(const mesh_type& msh,
+                    const size_t  imsh)
+    {
+        std::cout << " INSIDE MARKER ALL" << std::endl;
+        bool do_refinement = false;
+
+        for(auto& cl : msh)
+        {
+            auto cl_id    = cl.get_id();
+            cells_marks.at(cl_id) = 3;
+            if(imsh > 0)
+                ++levels.at(cl_id);
+            do_refinement = true;
+        }
+
+        dump_to_matlab(msh, mp.directory +  info + "_wl.m", cells_marks);
+
+        for(auto& cl : msh)
+           check_levels(msh, cl);
+
+        for(auto& b : cells_marks)
+            std::cout<<b<<"  ";
+
+        return do_refinement;
+    }
+    bool
+    test_marker_ratio(const mesh_type& msh,
                 const T& ratio,
                 const size_t  imsh)
     {
@@ -1125,6 +1142,7 @@ public:
                 r.at(i)  = std::sqrt(pts[i].x() * pts[i].x() + pts[i].y() * pts[i].y());
             auto result  = std::minmax_element(r.begin(), r.end());
 
+            #if 0
             std::cout << "cell : "<< cl_id << std::endl;
             std::cout << " * pts : ";
             for(auto& p: pts)
@@ -1132,12 +1150,13 @@ public:
             std::cout<< std::endl;
             std::cout << " * r_max: "<< *(result.second) << std::endl;
             std::cout << " * r_min: "<< *(result.first) << std::endl;
+            #endif
 
             if(*(result.second) >=  ratio )
             {
                 if (*(result.first) < ratio )
                 {
-                    std::cout << " * cell marked" << std::endl;
+                    //std::cout << " * cell marked" << std::endl;
                     cells_marks.at(cl_id) = 3;
                     if(imsh > 0)
                         ++levels.at(cl_id);
@@ -1157,6 +1176,7 @@ public:
 
         return do_refinement;
     }
+
     void
     check_for_NaN(const tensors<mesh_type>& tsr)
     {
@@ -1267,7 +1287,9 @@ public:
         switch(mp.marker_name)
         {
             case 1:
-                return ret = test_marker(msh, 0.3, 1);
+                return ret = test_marker_ratio(msh, pst.Bn, 1);
+            case 2:
+                return ret = test_marker_all(msh, 1);
                 //return ret = marker_prueba(msh, var.stress_Th, m_degree);
             //case 2:
             //    return ret = marker_jb(msh, var.stress_Th);

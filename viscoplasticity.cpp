@@ -292,20 +292,20 @@ struct variable2
 {
     typedef typename MeshType::scalar_type scalar_type;
     variable2(){}
-    std::vector<dynamic_vector<scalar_type>>  velocity_Th;
-    disk::tensors<MeshType>                   stresses_Th;
+    std::vector<dynamic_vector<scalar_type>>  velocity;
+    disk::tensors<MeshType>                   stresses;
 
     variable2& operator=(const variable2& other) {
-        velocity_Th   = other.velocity_Th;
-        stresses_Th   = other.stresses_Th;
+        velocity   = other.velocity;
+        stresses   = other.stresses;
         return *this;
     }
     template<typename CellBasisType, typename FaceBasisType>
     void
     Zero(const MeshType& msh, const size_t degree)
     {
-        velocity_Th = solution_zero_vector(msh, degree);
-        stresses_Th.template zero_vector<CellBasisType,FaceBasisType>(msh, degree);
+        velocity = solution_zero_vector(msh, degree);
+        stresses.template zero_vector<CellBasisType,FaceBasisType>(msh, degree);
     }
 };
 
@@ -602,7 +602,7 @@ public:
 
             vector_type pst_rhs;
 
-            vector_type u_local = var.velocity_Th.at(cell_id);
+            vector_type u_local = var.velocity.at(cell_id);
 
             if(mp.diff)  //Only for diffusion test
             {
@@ -615,7 +615,7 @@ public:
                 if(imsh == 0 && solution.is_exact && mp.start_exact)
                     u_local = projk.compute_whole(msh, cl, solution.sf);
 
-                pst_rhs = plasticity.compute_integral(msh, cl, var.stresses_Th);
+                pst_rhs = plasticity.compute_integral(msh, cl, var.stresses);
             }
 
             //WK: if viscosity changes with domain, it would be mandatory to
@@ -841,7 +841,7 @@ public:
             matrix_type loc_mat  = biforms.at(cell_id).cell_lhs * kappa;
             vector_type cell_rhs = biforms.at(cell_id).cell_rhs;
             vector_type pst_rhs;
-            vector_type u_local  = var.velocity_Th.at(cell_id);
+            vector_type u_local  = var.velocity.at(cell_id);
             if(mp.diff)  //Only for diffusion test
             {
                 std::cout << "Do plasticity.compute for diffusion" << std::endl;
@@ -849,11 +849,11 @@ public:
             }
             else        //normal plasticity
             {
-                pst_rhs = plasticity.compute_integral(msh, cl, var.stresses_Th);
+                pst_rhs = plasticity.compute_integral(msh, cl, var.stresses);
             }
             vector_type x = statcond_pst.recover(msh, cl, loc_mat, cell_rhs, xFs,
                                                               on_pst * pst_rhs);
-            var.velocity_Th.at(cell_id)  = x;
+            var.velocity.at(cell_id)  = x;
             vector_type Gt_uT = grec_oper * x;
 
             size_t number(1);
@@ -1025,19 +1025,21 @@ public:
         //#if 0
         if(imsh > 0 && mp.recycle)
         {
+            std::cout << "RECYCLING SOLUTION" << std::endl;
+
             //2_Precompute Gradient reconstruction operator
             std::vector<matrix_type> grad_global;
             grad_global =  precompute_gradient(old_msh, "high");
 
-            var.velocity_Th = disk::proj_rec_solution< mesh_type, T,
+            var.velocity = disk::proj_rec_solution< mesh_type, T,
                                 cell_basis_type, cell_quadrature_type,
                                 face_basis_type, face_quadrature_type>
-            (new_msh, old_msh, grad_global, old_var.velocity_Th, ancestors_vec, m_degree);
+            (new_msh, old_msh, grad_global, old_var.velocity, ancestors_vec, m_degree);
 
-            var.stresses_Th = disk::project_stresses< mesh_type, T,
+            var.stresses = disk::project_stresses< mesh_type, T,
                                 cell_basis_type, cell_quadrature_type,
                                 face_basis_type, face_quadrature_type, tensors_type>
-            (new_msh, old_msh, old_var.stresses_Th, ancestors_vec, m_degree);
+            (new_msh, old_msh, old_var.stresses, ancestors_vec, m_degree);
 
 
             #if 0
@@ -1048,10 +1050,9 @@ public:
 
             return var;
         }
-        else
-    //#endif
+        else //#endif
         {
-            //std::cout << "* SOLUTION_PROCEDURE ELSE" << std::endl;
+            std::cout << "* SOLUTION_PROCEDURE ELSE" << std::endl;
             var.template Zero<cell_basis_type,face_basis_type>(new_msh, m_degree);
             return var;
         }
@@ -1084,19 +1085,19 @@ public:
         else
         {
             //Load Uh_Th and tensor data
-            disk::load_data(old_var.velocity_Th, mp, "/Uh","R", imsh - 1);
-            disk::load_data(old_var.stresses_Th, old_msh, mp, "R",imsh);
-            assert( old_var.velocity_Th.size()  == old_msh.cells_size());
-            assert( old_var.stresses_Th.size()== old_msh.cells_size());
+            disk::load_data(old_var.velocity, mp, "/Uh","R", imsh - 1);
+            disk::load_data(old_var.stresses, old_msh, mp, "R",imsh);
+            assert( old_var.velocity.size()  == old_msh.cells_size());
+            assert( old_var.stresses.size()== old_msh.cells_size());
 
             //5_Precompute Gradient reconstruction operator
             std::vector<matrix_type> grad_global;
             grad_global = precompute_gradient(old_msh);
 
-            var.velocity_Th = disk::proj_rec_solution< mesh_type, T,
+            var.velocity = disk::proj_rec_solution< mesh_type, T,
                         cell_basis_type, cell_quadrature_type,
                             face_basis_type, face_quadrature_type>
-            (new_msh, old_msh, grad_global, old_var.velocity_Th, ancestors_vec, m_degree);
+            (new_msh, old_msh, grad_global, old_var.velocity, ancestors_vec, m_degree);
 
             #if 0
             auto filename = mp.directory + "/SIGMA_INTER_R" + tostr(imsh)+ ".m";
@@ -1160,6 +1161,7 @@ public:
         else
             return std::make_pair(true, old_msh);
     }
+    template<typename TimeCounter>
     auto
     convergence(const mesh_type& msh,
                      const variable_type & new_var,
@@ -1170,7 +1172,8 @@ public:
                      const size_t iter,
                      errors & e,
                      T      & old_error,
-                     std::ofstream & ifs)
+                     std::ofstream & ifs,
+                     const TimeCounter& tc)
     {
 
         e.set_zero_discrete_norms();
@@ -1189,12 +1192,12 @@ public:
             //var.get(cl, sigma);
 
             auto cl_id = cl.get_id();
-            vector_type    new_sigma   = new_var.stresses_Th.at_cell(msh, cl);
-            vector_type    old_sigma   = old_var.stresses_Th.at_cell(msh, cl);
+            vector_type    new_sigma   = new_var.stresses.at_cell(msh, cl);
+            vector_type    old_sigma   = old_var.stresses.at_cell(msh, cl);
             vector_type    sigma_diff  = new_sigma - old_sigma;
 
-            vector_type    new_uh   = new_var.velocity_Th.at(cl_id);
-            vector_type    old_uh   = old_var.velocity_Th.at(cl_id);
+            vector_type    new_uh   = new_var.velocity.at(cl_id);
+            vector_type    old_uh   = old_var.velocity.at(cl_id);
             vector_type    uh_diff  = new_uh - old_uh;
             vector_type    Guh_diff  = grec_opers.at(cl_id) * uh_diff;
 
@@ -1225,8 +1228,8 @@ public:
                     auto f_phi = fb.eval_functions(msh, fc, qp.point());
                     f_mass_mat  += qp.weight() * f_phi * f_phi.transpose();
                 }
-                vector_type  new_varsigma  = new_var.stresses_Th.at_face(msh, cl, fc);
-                vector_type  old_varsigma  = old_var.stresses_Th.at_face(msh, cl, fc);
+                vector_type  new_varsigma  = new_var.stresses.at_face(msh, cl, fc);
+                vector_type  old_varsigma  = old_var.stresses.at_face(msh, cl, fc);
                 vector_type  varsigma_diff = new_varsigma - old_varsigma;
 
                 auto pos = face_position(msh, cl, fc);
@@ -1261,7 +1264,12 @@ public:
         ifs << e.grad_u   <<"  "<< e.stab_u <<"  ";
         ifs << e.sigma    <<"  "<< e.gamma  <<"  ";
         ifs << e.varsigma <<"  "<< e.psi << "  ";
-        ifs << e.dof      <<"  "<< e.solver_conv    << std::endl;
+        ifs << e.dof      <<"  "<< e.solver_conv <<"  ";
+        ifs << tc << std::endl;
+
+        //for (auto& t : timings)
+        //    std::cout << " * " << t.first << ": " << t.second << " seconds." << std::endl;
+
 
         std::cout << "L2-norm error, residue_all: " << e.residue_all << std::endl;
         std::cout << "L2-norm error, gradiente  : " << e.grad_u << std::endl;
@@ -1302,33 +1310,65 @@ public:
         auto biforms  = precompute_bilinear_forms(msh, solution, grec_opers, stab_opers);
         plasticity    = plasticity_type(m_degree, pst, grec_opers, stab_opers);
 
+        timecounter tc;
+        std::map<std::string, double> timings;
+
         for(size_t iter = 0; iter < m_max_iters ; iter++)
         {
+            tc.tic();
+
             std::cout << "/* ____iter "<< imsh<<"-"<<iter<<"_____ */" << std::endl;
             auto old_var  = var;
             auto is_kappa_diff = false;
 
             kappa = compute_kappa(kappa, is_kappa_diff, on_pst, pst, mp, solution, iter, imsh);
-            make_stiff_matrix(msh, kappa, is_kappa_diff, biforms);
-            plasticity.compute_decoupling( msh, var.stresses_Th,  var.velocity_Th);
-            make_rhs_vector(msh, var, biforms, pst, solution, mp, kappa, on_pst, imsh);
-            vector_type X = solver.solve(assembly_pst.rhs);
 
+            timecounter tc_detail;
+            tc_detail.tic();
+            make_stiff_matrix(msh, kappa, is_kappa_diff, biforms);
+            tc_detail.toc();
+            timings["Stiff matrix"] += tc_detail.to_double();
+
+            tc_detail.tic();
+            plasticity.compute_decoupling( msh, var.stresses, var.velocity, timings);
+            tc_detail.toc();
+            timings["Plasticity"] += tc_detail.to_double();
+
+            tc_detail.tic();
+            make_rhs_vector(msh, var, biforms, pst, solution, mp, kappa, on_pst, imsh);
+            tc_detail.toc();
+
+            tc_detail.tic();
+            timings["Rhs vector"] += tc_detail.to_double();
+            vector_type X = solver.solve(assembly_pst.rhs);
+            tc_detail.toc();
+
+            tc_detail.tic();
+            timings["Recover solution"] += tc_detail.to_double();
             errors error;
             recover_solution(var, old_var, msh, X, grec_opers, biforms, pst,
                                         solution, mp, kappa, on_pst, error);
+            tc_detail.toc();
 
-            plasticity.update_multiplier(msh, var.stresses_Th, var.velocity_Th, error);
+            tc_detail.tic();
+            timings["Plasticity - multiplier"] += tc_detail.to_double();
+            plasticity.update_multiplier(msh, var.stresses, var.velocity, error);
+            tc_detail.toc();
+
+            tc.toc();
+
             convergence( msh, var, old_var, grec_opers, stab_opers, pst.alpha,
-                                            iter, error, old_error, ifs);
+                                            iter, error, old_error, ifs, tc);
 
             if (finalize(iter, msh, pst, error, tfs))
                 break;
         }
+        for (auto& t : timings)
+            std::cout << " * " << t.first << ": " << t.second << " seconds." << std::endl;
 
         auto rec_opers = precompute_gradient(msh, "high");
 
-        disk::postprocess(msh, var.stresses_Th, var.velocity_Th,
+        disk::postprocess(msh, var.stresses, var.velocity,
                                 grec_opers, rec_opers, mp, pst, m_degree, imsh);
         disk::execute(exfs, mp, pst, imsh);
 

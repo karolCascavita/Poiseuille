@@ -21,6 +21,8 @@
 #include "common/eigen.hpp"
 #include "bases/bases_utils.hpp"
 #include "bases/bases_ranges.hpp"
+#include "timecounter.h"
+
 namespace disk {
 
 template<typename T>
@@ -572,7 +574,7 @@ public:
         }
 
         //Recover Psi function: DOFs in  P^(k)_(d-1)
-        vector_type Psi = face_mass_matrix.ldlt().solve(lhs_vec);
+        vector_type Psi = face_mass_matrix.llt().solve(lhs_vec);
         m_decoupled_var.save(msh, cl, fc, Psi);
         return;
     }
@@ -618,32 +620,49 @@ public:
         }
 
         //Recover gamma function: DOFs in  [P^k]^d
-        vector_type gamma = mass_mat.ldlt().solve(lhs_vec);
+        vector_type gamma = mass_mat.llt().solve(lhs_vec);
         m_decoupled_var.save( msh, cl, gamma);
 
         return;
     }
-
+    template<typename Timing>
     void
     compute_decoupling(const mesh_type     & msh,
                        const tensors_type  & multiplier,
-                       const vec_vec_type  & velocity)
+                       const vec_vec_type  & velocity,
+                        Timing & timings)
     {
         m_decoupled_var.instantiate(msh.cells_size());
         m_decoupled_var.template zero_vector<CellBasisType, FaceBasisType>(msh, m_degree);
 
         for(auto& cl : msh)
         {
+            //timecounter tc_detail;
+            //tc_detail.tic();
             auto id  = msh.lookup(cl);
-            auto fcs = faces(msh, cl);
             vector_type sigma   = multiplier.at_cell( msh, cl);
             vector_type vel_TF  = velocity.at(id);
+            //tc_detail.toc();
+            //timings["Plasticity cells - grbg"] += tc_detail.to_double();
+
+            //tc_detail.tic();
             eval_plasticity( msh, cl, sigma, vel_TF);
+            //tc_detail.toc();
+            //timings["Plasticity cells"] += tc_detail.to_double();
+
+            auto fcs = faces(msh, cl);
 
             for (auto & fc :fcs)
             {
+                //tc_detail.tic();
                 vector_type varsigma = multiplier.at_face( msh, cl, fc );
+                //tc_detail.toc();
+                //timings["Plasticity faces - grbg"] += tc_detail.to_double();
+
+                //tc_detail.tic();
                 eval_plasticity(msh, cl, fc, varsigma, vel_TF);
+                //tc_detail.toc();
+                //timings["Plasticity faces"] += tc_detail.to_double();
             }
         }
         return;

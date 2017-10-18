@@ -32,7 +32,7 @@ compute_rhs(const Mesh& msh, const typename Mesh::cell& cl,
     typedef dynamic_vector<typename Mesh::scalar_type> vector_type;
 
     auto cell_basis     = CellBasisType(degree);
-    auto cell_quad      = CellQuadType(2*degree);
+    auto cell_quad      = CellQuadType(2 * degree);
     vector_type ret = vector_type::Zero(cell_basis.size());
 
     auto cell_quadpoints = cell_quad.integrate(msh, cl);
