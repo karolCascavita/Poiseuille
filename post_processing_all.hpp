@@ -74,13 +74,13 @@ class post_processing_base<T,1, Storage>
     make_vtk_points(const mesh_type& msh,const size_t degree)
     {
         m_degree = degree;
-        if(m_degree == 0)
-            m_degree = 1; /* Same treatment as linear functions*/
+        //if(m_degree == 0)
+        //    m_degree = 1; /* Same treatment as linear functions*/
 
         m_num_sub_nodes   = m_degree+1;
         m_num_sub_elems   = 1;
-        m_total_sub_nodes = 2*m_num_sub_nodes*msh.cells_size();
-        m_total_sub_elems = 2*msh.cells_size();
+        m_total_sub_nodes = 2 * m_num_sub_nodes * msh.cells_size();
+        m_total_sub_elems = 2 * msh.cells_size();
         m_sub_nodes.reserve(m_num_sub_nodes);
         m_vertices.reserve(2); /*WK: do it without reserve*/
         m_vertices[0]     = point<T,1>({0.});
@@ -103,7 +103,7 @@ class post_processing_base<T,1, Storage>
                 {
                     auto p     = m_sub_nodes[i];
                     auto c     = point<T,1> ({h*ifc});
-                    int  idx   = cont*m_num_sub_nodes + i;
+                    int  idx   = cont * m_num_sub_nodes + i;
 
                     test_points[idx] = h * p + pts[0] + c;
                 }
@@ -131,8 +131,8 @@ public:
 
 
     //post_processing_base(const mesh<T,2,Storage>& msh)
-    post_processing_base()
-    {}
+    post_processing_base(const size_t degree): m_degree(degree)
+    { }
 
     void
     plot_nodes(const size_t n, const std::vector<point_type>& vers, std::vector<point_type> & nodes)
@@ -170,10 +170,10 @@ public:
     make_vtk_points(const mesh_type& msh, const size_t degree)
     {
         m_degree = degree;
-        if(m_degree == 0)
-            m_degree = 1; /* Same treatment as linear functions*/
+        //if(m_degree == 0)
+        //    m_degree = 1; /* Same treatment as linear functions*/
 
-        m_num_sub_nodes   = 3*std::pow(4,m_degree);
+        m_num_sub_nodes   = 3 * std::pow(4,m_degree);
         m_num_sub_elems   = std::pow(4,m_degree);
         m_total_sub_nodes = m_num_sub_nodes*(msh.boundary_faces_size() +  2*msh.internal_faces_size() );
         m_total_sub_elems = m_num_sub_elems*(msh.boundary_faces_size() +  2*msh.internal_faces_size() );
@@ -208,6 +208,69 @@ public:
     }
 };
 
+template<typename MeshType, typename TensorsType>
+void
+quiver_matlab(const MeshType& msh,
+              const std::string& filename,
+              const size_t degree,
+              const TensorsType & mpt)
+{
+    typedef MeshType                           mesh_type;
+    typedef typename mesh_type::scalar_type             scalar_type;
+    typedef typename mesh_type::cell                    cell_type;
+    typedef typename mesh_type::face                    face_type;
+
+    typedef disk::quadrature<mesh_type, cell_type>      cell_quad_type;
+    typedef disk::quadrature<mesh_type, face_type>      face_quad_type;
+
+    typedef disk::scaled_monomial_scalar_basis<mesh_type, cell_type>    cell_basis_type;
+
+    typedef dynamic_matrix<scalar_type> matrix_type;
+    typedef dynamic_vector<scalar_type> vector_type;
+
+    cell_basis_type cell_basis(degree);
+    cell_quad_type cell_quadrature(2 * degree);
+    face_quad_type face_quadrature(2 * degree);
+
+    std::ofstream ofs(filename);
+    if (!ofs.is_open())
+        std::cout << "Error opening file :"<< filename<<std::endl;
+
+    ofs << " hold on;"<<std::endl;
+    ofs << "pts = [";
+    for (auto& cl: msh)
+    {
+        auto cell_quadpoints = cell_quadrature.integrate(msh, cl);
+        for (auto& qp : cell_quadpoints)
+            ofs << qp.point().x() << "  "<< qp.point().y() << std::endl;
+    }
+    ofs << "];"<<std::endl;
+    ofs << "tau = [";
+
+    for (auto& cl: msh)
+    {
+        vector_type sigma = mpt.at_cell(msh, cl);
+
+        auto cell_quadpoints = cell_quadrature.integrate(msh, cl);
+
+        for (auto& qp : cell_quadpoints)
+        {
+            auto phi = cell_basis.eval_functions(msh, cl, qp.point(), 0, degree);
+            matrix_type vec_phi = make_vectorial_matrix(phi, mesh_type::dimension);
+
+            vector_type  vec = vec_phi * sigma;
+            ofs << vec(0) << "  "<< vec(1) << std::endl;
+        }
+    }
+    ofs << "];"<<std::endl;
+
+    ofs << "quiver(pts(:,1),pts(:,2),tau(:,1),tau(:,2));"<< std::endl;
+
+    ofs.close();
+}
+
+
+
 template<typename T, size_t DIM, typename Storage>
 class post_processing: public post_processing_base<T,DIM,Storage>
 {
@@ -223,15 +286,44 @@ public:
     typedef dynamic_matrix<scalar_type>                 matrix_type;
     typedef std::vector<point_type>                     point_vector_type;
 
-    size_t m_degree;
+    typedef quadrature<mesh_type, cell_type>     cell_quadrature_type;
+    typedef quadrature<mesh_type, face_type>     face_quadrature_type;
+
+    typedef scaled_monomial_scalar_basis<mesh_type, cell_type>    cell_basis_type;
+    typedef scaled_monomial_scalar_basis<mesh_type, face_type>    face_basis_type;
 
     point_vector_type sub_nodes;
     point_vector_type vertices;
+    std::vector<matrix_type> m_gradrec_opers;
+    cell_basis_type   cb;
+    face_basis_type   fb;
+
+    std::vector<point_type> test_points;
+    size_t num_sub_elems;
+    size_t num_sub_nodes;
+    size_t total_sub_nodes;
+    size_t total_sub_elems;
+    size_t m_degree;
+
 
 //    post_processing(const mesh<T,DIM,Storage>& msh): pp_base(msh)
-    post_processing():
-     pp_base()
-    { }
+    post_processing(const std::vector<matrix_type>& gradrec_opers,
+                    const size_t degree):
+     pp_base(degree)
+    {
+        m_gradrec_opers = gradrec_opers;
+        cb = cell_basis_type(degree);
+        fb = face_basis_type(degree);
+
+        m_degree = degree;
+    }
+
+    post_processing(const size_t degree):
+     pp_base(degree)
+    {
+        cb = cell_basis_type(degree);
+        m_degree = degree;
+    }
 
     struct sizes
     {
@@ -242,204 +334,99 @@ public:
         size_t num_vectors;
     };
 
-    void paraview(const mesh_type& msh, const std::string& name, const size_t degree,
-                    const std::vector<dynamic_vector<T>> & Uh_Th)
+    void paraview_faces(const mesh_type   & msh,
+                        const std::string & name,
+                        const std::vector< std::pair<dynamic_vector<T>,
+                                            dynamic_vector<T>>> & vec,
+                        const std::string & type)
     {
-    #if 0
-        if(degree == 1)
-            vtk_second_order(msh, name, degree, Uh_Th, iter);
-        else
-            vtk_higher_order(msh, name, degree, Uh_Th, iter);
-    #endif
-    vtk_higher_order(msh, name, degree, Uh_Th);
-    }
-    #if 0
-    void vtk_writer(const size_t degree,
-                    const std::string & file_name,
-                    const std::stringstream &  vtk_points,
-                    const std::stringstream &  vtk_elems,
-                    const std::stringstream &  vtk_scalar_data,
-                    const std::stringstream &  vtk_vector_data,const sizes& sz)
-    {
-        size_t el = 0;
-        std::vector<size_t> vtk_cell_type = {4,5,10}; /*WK: check this for others VTK types*/
-        std::vector<size_t> vtk_nodes_inside_cell = {degree+1,3,4};/* WK: all cells are the same type */
-        for (size_t i = 0; i <  sz.num_elems; i++)
-        {
-            vtk_elems << vtk_nodes_inside_cell[DIM-1] << " ";
-            for(size_t j=0; j < vtk_nodes_inside_cell[DIM-1]; j++, el++)
-                vtk_elems << el<< " ";
-            vtk_elems <<  '\n';
-        }
-
+        test_points  = pp_base::make_vtk_points(msh, m_degree);
         /*VTK file*/
         std::string ext = ".vtk";
-        std::ofstream  ofs(file_name + ext);
-        ofs << "# vtk DataFile Version 3.0"<< '\n'
-            << "#This file was generated by the DISK++ library"<< '\n'
-            << "ASCII"<< '\n';
+        std::ofstream  ofs(name + ext);
+        ofs << "# vtk DataFile Version 3.0"<< std::endl;
+        ofs << "#This file was generated by the DISK++ library"<< std::endl;
+        ofs << "ASCII"<< std::endl;
 
         /* Data header */
-        ofs << "DATASET UNSTRUCTURED_GRID\n"
-            << '\n';
+        ofs << "DATASET UNSTRUCTURED_GRID\n" << std::endl;
+
+
+        auto N   = m_degree;
+        if(m_degree == 0)
+            N = 1;
+        auto total_sub_nodes = msh.faces_size() * (N + 1);
+        auto total_sub_elems = msh.faces_size();
 
         /* Points */
-        ofs << "POINTS " << sz.num_nodes<<" double"<<'\n'
-            << vtk_points.str()
-            << '\n';
+        ofs << "POINTS " << total_sub_nodes<<" double"<<std::endl;
+
+        for(auto itor = msh.faces_begin(); itor != msh.faces_end(); itor++)
+        {
+            auto fc = *itor;
+            auto pts = points(msh, fc);
+            auto h = (pts[1] - pts[0]) / N;
+
+            for(auto i = 0; i < N + 1; i++)
+            {
+                auto tp = pts[0] + i * h;
+
+                for (size_t d = 0; d < DIM; d++)
+                    ofs << tp.at(d) << " ";
+                for (size_t d = 0; d < 3 - DIM; d++) /* VTK only supports until 3D */
+                    ofs<< 0. << " ";
+                ofs<< std::endl;
+            }
+        }
+        ofs<<std::endl;
 
         /* Cells */
-        ofs << "CELLS " << sz.num_elems <<' '<<  sz.num_elems *(vtk_nodes_inside_cell[DIM-1] + 1)<< '\n'
-            << vtk_elems.str()
-            << '\n';
-
-        /* Types of cells*/
-        ofs << "CELL_TYPES " << sz.num_elems << '\n';
-            for(size_t i = 0; i < sz.num_elems; i++)
-                ofs << ' ' << vtk_cell_type[DIM-1];
-        ofs << '\n';
-
-        /* Data */
-        ofs << "POINT_DATA " << sz.num_nodes
-            << '\n';
-
-        ofs << "VECTORS "
-            << " Gr_U"
-            << " double"
-            << '\n'
-            << vtk_vector_data.str()
-            << '\n';
-
-        ofs << "SCALARS "
-            << " U "
-            << " double 1"
-            << '\n'
-            << "LOOKUP_TABLE default"
-            << '\n'
-            << vtk_scalar_data.str()
-            << '\n';
-        ofs.close();
-
-    }
-
-    void vtk_second_order(const mesh_type& msh, const std::string& name, const size_t degree,
-                            const std::vector<dynamic_vector<T>> & Uh_Th, const int iter)   /* storage of velocities*/
-    {
-        typedef quadrature<mesh_type, cell_type>     cell_quadrature_type;
-        typedef quadrature<mesh_type, face_type>     face_quadrature_type;
-
-        typedef scaled_monomial_scalar_basis<mesh_type, cell_type>    cell_basis_type;
-        typedef scaled_monomial_scalar_basis<mesh_type, face_type>    face_basis_type;
-
-        gradient_reconstruction_nopre<mesh_type,
-                                            cell_basis_type,
-                                            cell_quadrature_type,
-                                            face_basis_type,
-                                            face_quadrature_type> gradrec_nopre(degree);
-
-
-        cell_basis_type                 cb(degree+1);
-        std::stringstream               vtk_points, vtk_elems, vtk_scalar_data, vtk_vector_data;
-
-        size_t cl_cont = 0;
-
-        for(auto& cl : msh)
+        size_t el = 0;
+        ofs << "CELLS " << total_sub_elems <<' '<<  total_sub_elems *(N+1 + 1)<< std::endl;
+        for (size_t i = 0; i < total_sub_elems; i++)
         {
-            auto fcs    = faces(msh,cl);
-            auto num_fcs = fcs.size();
-            auto bar    = barycenter(msh,cl);
-            if(num_fcs == 3 | num_fcs == 4)
-            {
-                auto points = points(msh,cl);
-                for(auto& fc : fcs)
-                {
-                    auto bar = barycenter(msh,fc);
-                    points.push_back(bar);
-                }
-            }
-            else
-            {
-                for( auto& fc : fcs)
-                {
-                    auto pts = points(msh,fc);
-                    auto it  = pts.begin();
-                    std::vector<point_type> new_pts(6);
-                    new_pts.at(0)  = pts.at(0);
-                    new_pts.at(1)  = pts.at(1);
-                    new_pts.at(2)  = bar;
-                    new_pts.at(3)  = (pts.at(0) +  bar )/2.;
-                    new_pts.at(4)  = (pts.at(1) +  bar )/2.;
-                    new_pts.at(5)  = (pts.at(0) +  pts.at(1) )/2.;
-                }
-            }
-            #if 0
-            gradrec_nopre.compute(msh, cel);
-            vector_type     uh_TF =  Uh_Th[cl_cont];
-            dynamic_vector<scalar_type> rec(cb.size());
-            rec.tail(cb.size()-1) = gradrec_nopre.oper * uh_TF;
-            rec(0) = uh_TF(0);
-            auto col_range  =   cb.range(1,degree+1);
-            auto row_range  =   dof_range(0,DIM);
-
-            for(auto& tp : points)
-            {
-                auto phi  = cb.eval_functions(msh, cel, tp);
-                auto dphi = cb.eval_gradients(msh, cel, tp);
-
-                for (size_t d = 0; d < DIM; d++)
-                    vtk_points << tp[d] << " ";
-                for (size_t d = 0; d < 3 - DIM; d++) /* VTK only supports until 3D */
-                    vtk_points<< 0. << " ";
-                vtk_points<< '\n';
-
-                for (size_t i = 0; i < cb.size(); i++)
-                    pot  +=  phi[i] * rec(i);
-                vtk_scalar_data << pot <<' ';
-
-                matrix_type  dphi_matrix     =  make_gradient_matrix(dphi);
-                matrix_type  dphi_high_order =  take(dphi_matrix, row_range, col_range);
-                vector_type  dpot =   dphi_high_order * rec.tail(col_range.size());
-
-                for (size_t d = 0; d < DIM; d++)
-                    vtk_vector_data << dpot(d) << " ";
-                for (size_t d = 0; d < 3 - DIM; d++) /* VTK only supports until 3D */
-                    vtk_vector_data<< 0. << " ";
-                vtk_vector_data<< '\n';
-            }
-            cl_cont++;
-            #endif
+            ofs << N + 1 << " ";
+            for(size_t j=0; j < N+1; j++, el++)
+                ofs << el<< " ";
+            ofs<< std::endl;
         }
 
-        //vtk_writer(vtk_points, vtk_elems, vtk_scalar_data, vtk_vector_data, sz);
+        /* Types of cells*/
+        ofs << "CELL_TYPES " << total_sub_elems << std::endl;
+            for(size_t i = 0; i < total_sub_elems; i++)
+                ofs << ' ' << 4;
+        ofs << std::endl;
+
+        /* Data */
+        ofs << "POINT_DATA " << total_sub_nodes << std::endl;
+        ofs << "VECTORS  Vector  double"<< std::endl;
+
+        size_t fcount = 0;
+        for(auto& data: vec)
+        {
+            auto fc = *std::next(msh.faces_begin(), fcount++);
+            auto pts = points(msh, fc);
+            auto h = (pts[1] - pts[0]) / N;
+
+            for(auto i = 0; i < N + 1; i++)
+            {
+                auto tp = pts[0] + i * h;
+
+                auto phi = fb.eval_functions(msh, fc, tp);
+                ofs << phi.dot(data.first)<< " "<<phi.dot(data.second) <<" "<< 0.<<std::endl;
+            }
+        }
+        ofs.close();
+        return;
     }
-#endif
-    void vtk_higher_order(const mesh_type& msh,
-                            const std::string& name,
-                            const size_t degree,
-                            const std::vector<dynamic_vector<T>> & Uh_Th)
+
+
+    void paraview(const mesh_type   & msh,
+                  const std::string & name,
+                  const std::vector<dynamic_vector<T>> & vector_Th,
+                  const std::string & type)
     {
-        typedef quadrature<mesh_type, cell_type>     cell_quadrature_type;
-        typedef quadrature<mesh_type, face_type>     face_quadrature_type;
-
-        typedef scaled_monomial_scalar_basis<mesh_type, cell_type>    cell_basis_type;
-        typedef scaled_monomial_scalar_basis<mesh_type, face_type>    face_basis_type;
-
-        gradient_reconstruction_nopre<mesh_type,
-                                            cell_basis_type,
-                                            cell_quadrature_type,
-                                            face_basis_type,
-                                            face_quadrature_type> gradrec_nopre(degree);
-
-
-        cell_basis_type             cb(degree+1);
-        std::stringstream           vtk_points;
-        std::stringstream           vtk_elems;
-        std::stringstream           vtk_scalar_data;
-        std::stringstream           vtk_vector_data;
-
-        size_t num_sub_elems, num_sub_nodes;
-        size_t total_sub_nodes, total_sub_elems;
-        auto   test_points  = pp_base::make_vtk_points(msh,degree);
+        test_points  = pp_base::make_vtk_points(msh, m_degree);
 
         total_sub_nodes = pp_base::m_total_sub_nodes;
         total_sub_elems = pp_base::m_total_sub_elems;
@@ -453,7 +440,7 @@ public:
         std::string file_name = name;
 
         std::vector<size_t> vtk_cell_type = {4,5,10}; /*WK: check this for others VTK types*/
-        std::vector<size_t> vtk_nodes_inside_cell = {degree+1,3,4};/* WK: all cells are the same type */
+        std::vector<size_t> vtk_nodes_inside_cell = {m_degree+1,3,4};/* WK: all cells are the same type */
 
         //vtk_writer(vtk_points, vtk_elems, vtk_scalar_data, vtk_vector_data, sz);
 
@@ -472,13 +459,8 @@ public:
 
         for(auto& cel : msh)
         {
-            gradrec_nopre.compute(msh, cel);
-            vector_type uh_TF =  Uh_Th[cl_cont];
-            dynamic_vector<scalar_type> rec(cb.size());
-            rec.tail(cb.size()-1) = gradrec_nopre.oper * uh_TF;
-            rec(0) = uh_TF(0);
+            auto cl_faces = faces(msh, cel);
 
-            auto cl_faces =faces(msh,cel);
             for(auto& fc : cl_faces)
             {
                 for (size_t itp = 0; itp < num_sub_nodes; itp++)
@@ -519,33 +501,46 @@ public:
         /* Data */
         ofs << "POINT_DATA " << total_sub_nodes << std::endl;
 
-        ofs << "VECTORS  Gr_U  double"<< std::endl;
+        if(type == "scalar")
+            vtk_scalar(ofs, msh, name, vector_Th);
+        if(type == "vector")
+            vtk_vector(ofs, msh, name, vector_Th);
 
-        cl_cont = 0;
-        fc_cont = 0;
-        for(auto& cel : msh)
+        ofs.close();
+
+        return;
+    }
+
+    void vtk_vector(std::ofstream &ofs,
+                    const mesh_type& msh,
+                    const std::string& name,
+                    const std::vector<dynamic_vector<T>> & vec)
+    {
+        ofs << "VECTORS  Vector  double"<< std::endl;
+
+        size_t cl_cont = 0;
+        size_t fc_cont = 0;
+
+        auto mindeg = 0;
+        auto maxdeg = m_degree;
+        auto zero_range = cb.range( mindeg,  maxdeg);
+
+        for(auto& cl : msh)
         {
-            gradrec_nopre.compute(msh, cel);
-            vector_type uh_TF =  Uh_Th[cl_cont];
-            dynamic_vector<scalar_type> rec(cb.size());
-            rec.tail(cb.size()-1) = gradrec_nopre.oper * uh_TF;
-            rec(0) = uh_TF(0);
+            auto cl_id = msh.lookup( cl);
+            auto fcs   = faces(msh, cl);
+            vector_type v = vec.at(cl_id);
 
-            auto cl_faces =faces(msh,cel);
-            for(auto& fc : cl_faces)
+            for(auto& fc : fcs)
             {
                 for (size_t itp = 0; itp < num_sub_nodes; itp++)
                 {
                     auto pot  = 0.;
-                    auto idx  = itp + num_sub_nodes*fc_cont;
+                    auto idx  = itp + num_sub_nodes * fc_cont;
                     auto tp   = test_points.at(idx);
-                    auto dphi = cb.eval_gradients(msh, cel, tp);
-                    auto col_range  =   cb.range(1,degree+1);
-                    auto row_range  =   dof_range(0,DIM);
-
-                    matrix_type dphi_matrix =  make_gradient_matrix(dphi);
-                    matrix_type dphi_high_order =   take(dphi_matrix, row_range, col_range);
-                    vector_type dpot =   dphi_high_order * rec.tail(col_range.size());
+                    auto c_phi = cb.eval_functions(msh, cl, tp, mindeg, maxdeg);
+                    matrix_type vec_phi = make_vectorial_matrix(c_phi, DIM);
+                    vector_type dpot    = vec_phi * v;
                     for (size_t d = 0; d < DIM; d++)
                         ofs <<  dpot(d) << " ";
 
@@ -557,304 +552,380 @@ public:
             }
             ++cl_cont;
         }
+        return;
+    }
 
-        cl_cont = 0;
-        fc_cont = 0;
+    void
+    vtk_scalar( std::ofstream &ofs,
+                const mesh_type& msh,
+                const std::string& name,
+                const std::vector<dynamic_vector<T>> & vec)
+    {
+        size_t cl_cont = 0;
+        size_t fc_cont = 0;
 
-        ofs << "SCALARS  U  double 1"<< std::endl;
+        ofs << "SCALARS  Scalar  double 1"<< std::endl;
         ofs << "LOOKUP_TABLE default"<< std::endl;
+        auto mindeg = 0;
+        auto maxdeg = m_degree;
+        auto zero_range = cb.range( mindeg,  maxdeg);
+
         for(auto& cel : msh)
         {
-            gradrec_nopre.compute(msh, cel);
-            vector_type uh_TF =  Uh_Th[cl_cont];
-            dynamic_vector<scalar_type> rec(cb.size());
-            rec.tail(cb.size()-1) = gradrec_nopre.oper * uh_TF;
-            rec(0) = uh_TF(0);
-            auto cl_faces =faces(msh,cel);
-            for(auto& fc : cl_faces)
+            vector_type dofs =  vec.at(cl_cont);
+
+            auto fcs = faces(msh, cel);
+
+            for(auto& fc : fcs)
             {
                 for (size_t itp = 0; itp < num_sub_nodes; itp++)
                 {
                     auto pot  = 0.;
-                    auto idx  = itp + num_sub_nodes*fc_cont;
+                    auto idx  = itp + num_sub_nodes * fc_cont;
                     auto tp   = test_points.at(idx);
-                    auto phi  = cb.eval_functions(msh, cel, tp);
+                    auto phi  = cb.eval_functions(msh, cel, tp, mindeg, maxdeg);
+
+                    assert(cb.size() == dofs.size());
                     for (size_t i = 0; i < cb.size(); i++)
-                        pot  +=  phi[i] * rec(i);
+                        pot  +=  phi[i] * dofs(i);
                     ofs << pot <<' ';
                 }
                 ++fc_cont;
             }
             ++cl_cont;
         }
-        ofs.close();
+        return;
     }
 
+    // Return polar angle of p with respect to origin o
+    auto
+    to_angle(const point_type& p, const point_type& o)
+    {
+      return atan2(p.y() - o.y(), p.x() - o.x());
+    }
 
-    template<typename TensorMatrix>
-    void tensor_norm_vtk_writer(const mesh_type& msh, const std::string& name, const size_t quad_degree,
-               const std::vector<TensorMatrix> & tensor)   /* storage of velocities*/
+    auto
+    sort_by_polar_angle(const mesh_type & msh,
+                             const cell_type& cl,
+                             const std::vector<point_type>& pts)
+    {
+        auto h = barycenter(msh, cl);
+        auto sorted_pts = pts;
+
+        std::sort( sorted_pts.begin(), sorted_pts.end(),
+         [&](const point_type& va, const point_type& vb )
+            {
+
+                auto theta_a = to_angle(va, h);
+                auto theta_b = to_angle(vb, h);
+
+                return (theta_a < theta_b);
+            }
+        );
+        //std::cout << "/ * sorted points */" << std::endl;
+        //for(auto p : sorted_pts)
+        //    std::cout<< "    "<<p.x()  << " "<< p.y()<< std::endl;
+        return sorted_pts;
+    }
+
+    double dot(const point_type& p1, const point_type& p2)
+    {
+        return p1.x()*p2.x() + p1.y()*p2.y();
+    }
+
+    double distance(const point_type& p1, const point_type& p2)
+    {
+        return sqrt(dot(p1, p2));
+    }
+    bool is_inside(const mesh_type& msh, const cell_type & cl, const point_type& pt)
     {
 
-        typedef quadrature<mesh_type, cell_type>     cell_quadrature_type;
-        typedef quadrature<mesh_type, face_type>     face_quadrature_type;
+        auto pts = points(msh, cl);
+        auto vts = msh.get_vertices(cl, pts);
 
-        typedef scaled_monomial_scalar_basis<mesh_type, cell_type>    cell_basis_type;
-        typedef scaled_monomial_scalar_basis<mesh_type, face_type>    face_basis_type;
+        if(vts.size() > 3)
+            throw std::invalid_argument("Extend is_inside for other polygons.");
 
-        cell_quadrature_type    cq(quad_degree);
-        std::stringstream       vtk_points, vtk_elems, vtk_data_x, vtk_data_y, vtk_data_norm;
+        auto v0 = vts[1] - vts[0];
+        auto v1 = vts[2] - vts[0];
+        auto v2 = pt - vts[0];
 
-        size_t cl_cont = 0;
-        size_t total_num_pts  = 0;
-        std::string result;
-        //std::string file_name = name + "_i" + numstr;
-        std::string file_name = name ;
+        auto dot00 = dot(v0, v0);
+        auto dot01 = dot(v0, v1);
+        auto dot02 = dot(v0, v2);
+        auto dot11 = dot(v1, v1);
+        auto dot12 = dot(v1, v2);
 
-        for(auto& cel : msh)
-        {
-            size_t qp_cont = 0;
-            auto cell_id   = cel.get_id();
-            auto cell_quadpoints     =  cq.integrate(msh, cel);
-            auto cqs  = cell_quadpoints.size();
-            auto pts  = points(msh,cel);
-            auto ps   = pts.size();
-            auto local_tensor_storage =  tensor[cell_id];
+        auto invDenom = 1. / (dot00 * dot11 - dot01 * dot01);
+        auto u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+        auto v = (dot00 * dot12 - dot01 * dot02) * invDenom;
 
-            total_num_pts += cqs + ps;
+        /* The threshold we're discussing this afternoon may be needed here */
+        //return (u >= 0) && (v >= 0) && (u + v <= 1);
+        /* The threshold we're discussing this afternoon may be needed here */
+        bool upos  = (std::abs(u) < 1.e-5 * invDenom) || ( u > T(0));
+        bool vpos  = (std::abs(v) < 1.e-5 * invDenom) || ( v > T(0));
+        bool uvpos = (std::abs(u + v - 1.) < 1.e-10) || (u + v < 1.);
 
-            for (auto& qp : cell_quadpoints)
-            {
-                auto tp  = qp.point();
+        //std::cout << pt.x()<<" " << pt.y() << std::endl;
+        //std::cout << v0.x()<<" " << v0.y() << std::endl;
+        //std::cout << v1.x()<<" " << v1.y() << std::endl;
+        //std::cout << v2.x()<<" " << v2.y() << std::endl;
 
-                for (size_t d = 0; d < DIM; d++)
-                    vtk_points << tp[d] << " ";
-                for (size_t d = 0; d < 3 - DIM; d++) /* VTK only supports until 3D */
-                    vtk_points<< 0. << " ";
-                vtk_points<< '\n';
-
-                vector_type pot = local_tensor_storage.col(qp_cont);
-                if( DIM == 1)
-                    vtk_data_norm << pot << " ";
-                if (DIM == 2)
-                    vtk_data_norm << pot.norm() << " ";
-                ++qp_cont;
-            }
-            for (size_t i = 0, j = cqs; i < ps; i++, j++)
-            {
-                auto tp = pts.at(i);
-                for (size_t d = 0; d < DIM; d++)
-                    vtk_points << tp[d] << " ";
-                for (size_t d = 0; d < 3 - DIM; d++) /* VTK only supports until 3D */
-                    vtk_points<< 0. << " ";
-                vtk_points<< '\n';
-
-                vector_type pot = local_tensor_storage.col(j);
-                if( DIM == 1)
-                    vtk_data_norm << pot << " ";
-                if (DIM == 2)
-                    vtk_data_norm << pot.norm() << " ";
-            }
-
-            ++cl_cont;
-        }
-
-        size_t el = 0;
-
-        for (size_t i = 0; i < total_num_pts; i++)
-            vtk_elems << 1 <<" "<< i <<  '\n';
-
-        /*VTK file*/
-        std::string ext = ".vtk";
-        std::ofstream  ofs(file_name + ext);
-        ofs << "# vtk DataFile Version 3.0"<< '\n'
-            << "#This file was generated by the DISK++ library"<< '\n'
-            << "ASCII"<< '\n';
-
-        /* Data header */
-        ofs << "DATASET UNSTRUCTURED_GRID\n"
-            << '\n';
-
-        /* Points */
-        ofs << "POINTS " << total_num_pts <<" double"<<'\n'
-            << vtk_points.str()
-            << '\n';
-
-        /* Cells */
-        ofs << "CELLS " << total_num_pts <<' '<<  total_num_pts *(1 + 1)<< '\n'
-            << vtk_elems.str()
-            << '\n';
-
-        /* Types of cells*/
-        ofs << "CELL_TYPES " << total_num_pts << '\n';
-            for(size_t i = 0; i < total_num_pts; i++)
-                ofs << " " << 1;
-        ofs << '\n';
-
-        /* Data */
-        ofs << "POINT_DATA " << total_num_pts
-            << '\n';
-
-        ofs << "SCALARS "
-            << " Lambda_norm "
-            << " double 1"
-            << '\n'
-            << "LOOKUP_TABLE default"
-            << '\n'
-            << vtk_data_norm.str()
-            << '\n';
-
-        ofs.close();
+        return (upos && vpos && uvpos);
     }
-    template<typename TensorMatrix>
+
+    // Copyright 2000 softSurfer, 2012 Dan Sunday
+    // This code may be freely used and modified for any purpose
+    // providing that this copyright notice is included with it.
+    // SoftSurfer makes no warranty for this code, and cannot be held
+    // liable for any real or imagined damage resulting from its use.
+    // Users of this code must verify correctness for their application.
+
+
+    // a Point is defined by its coordinates {int x, y;}
+    //===================================================================
+
+
+    // isLeft(): tests if a point is Left|On|Right of an infinite line.
+    //    Input:  three points P0, P1, and P2
+    //    Return: >0 for P2 left of the line through P0 and P1
+    //            =0 for P2  on the line
+    //            <0 for P2  right of the line
+    //    See: Algorithm 1 "Area of Triangles and Polygons"
+    auto
+    isLeft( const point_type& P0, const point_type& P1, const point_type& P2 )
+    {
+
+        auto ret = ( (P1.x() - P0.x()) * (P2.y() - P0.y())
+                - (P2.x() -  P0.x()) * (P1.y() - P0.y()) );
+        #if 0
+        std::cout << " is_Left_inside number : "<< ret << std::endl;
+
+        std::cout << "P0: "<< P0.x() << P0.y()<< std::endl;
+        std::cout << "P1: "<< P1.x() << P1.y()<< std::endl;
+        std::cout << "P2: "<< P2.x() << P2.y()<< std::endl;
+        #endif
+        return ret;
+    }
+    //===================================================================
+
+
+    // cn_PnPoly(): crossing number test for a point in a polygon
+    //      Input:   P = a point,
+    //               V[] = vertex points of a polygon V[n+1] with V[n]=V[0]
+    //      Return:  0 = outside, 1 = inside
+    // This code is patterned after [Franklin, 2000]
+    auto
+    cn_PnPoly( const point_type  & P, const std::vector<point_type>& vts, const int n )
+    {
+        auto V = vts;
+        V.push_back(vts.at(0));
+
+        int    cn = 0;    // the  crossing number counter
+
+        // loop through all edges of the polygon
+        for (int i = 0; i < n; i++)
+        {
+            // edge from V[i]  to V[i+1]
+           if ( ((V[i].y() <= P.y()) && (V.at(i+1).y() > P.y() ))     // an upward crossing
+                    || ((V.at(i).y() > P.y()) && (V.at(i+1).y() <=  P.y() )))
+            {
+                // a downward crossing
+                // compute  the actual edge-ray intersect x-coordinate
+                T vt = (P.y()  - V.at(i).y()) / (V.at(i+1).y() - V.at(i).y());
+                if (P.x() <  V.at(i).x() + vt * (V.at(i+1).x() - V.at(i).x() )) // P.x < intersect
+                     ++cn;   // a valid crossing of y=P.y right of P.x
+            }
+        }
+        return (cn&1);    // 0 if even (out), and 1 if  odd (in)
+    }
+    //===================================================================
+
+
+    // wn_PnPoly(): winding number test for a point in a polygon
+    //      Input:   P = a point,
+    //               V[] = vertex points of a polygon V[n+1] with V[n]=V[0]
+    //      Return:  wn = the winding number (=0 only when P is outside)
+    bool
+    wn_PnPoly(const mesh_type& msh,
+              const cell_type& cl,
+              const point_type& P,
+              const std::vector<point_type>& vts )
+    {
+        auto spts = sort_by_polar_angle(msh, cl, vts);
+        spts.push_back(spts.at(0));
+
+        int    wn = 0;    // the  winding number counter
+        //#if 0
+
+        // loop through all edges of the polygon
+        for (int i = 0 ; i < spts.size() - 1; i++)
+        {   // edge from V[i] to  V[i+1]
+            if (spts.at(i).y() <= P.y() )
+            {          // start y <= P.y
+                if (spts.at(i+1).y()  > P.y())      // an upward crossing
+                {
+                    //std::cout << "***** upward crossing edge : "<< i <<"********** "<< std::endl;
+                    if (isLeft( spts.at(i), spts.at(i+1), P) > T(0))  // P left of  edge
+                    {
+                        //std::cout << "** valid up intersect--------------------------" << std::endl;
+                        ++wn;
+                    }               // have  a valid up intersect
+                }
+            }
+            else
+            {
+                // start y > P.y (no test needed)
+                if ( spts.at(i+1).y()  <= P.y())     // a downward crossing
+                {
+                    //std::cout << "**** downward crossing  edge : "<< i <<"********** "<< std::endl;
+
+                    if (isLeft( spts.at(i), spts.at(i+1), P) < T(0))  // P right of  edge
+                    {
+                        //std::cout << "** valid down intersect-----------------------" << std::endl;
+                        --wn;
+                    }               // have  a valid down intersect
+                }
+            }
+            //std::cout << "wn = "<< wn << std::endl;
+        }
+        //#endif
+        if(wn != 0)
+            return true;
+        return false;
+    }
+
     void
-    gauss_points_to_matlab(const mesh_type& msh, const std::string& name, const size_t quad_degree,
-               const std::vector<TensorMatrix> & tensor, const std::string& other_info)   /* storage of velocities*/
+    plot_over_line(const mesh_type    & msh,
+                   const std::vector<vector_type>   & rec_vel_Th,
+                   const std::string & filename)
     {
+        std::ofstream pfs(filename);
+        if(!pfs.is_open())
+            std::cout << "Error opening file :"<< filename <<std::endl;
 
-        typedef quadrature<mesh_type, cell_type>     cell_quadrature_type;
-        cell_quadrature_type    cq(quad_degree);
-        std::stringstream       vtk_points, vtk_elems, vtk_data_x, vtk_data_y, vtk_data_norm;
+        point_type p1 = point_type({-1.0, 0.0});
+        point_type p2 = point_type({ 1.0,  0.0});
 
-        std::ofstream cofs(name);
-        size_t i = 0;
-        if (!cofs.is_open())
-            std::cout << "Error opening cofs"<<std::endl;
+        auto N = 400;
+        auto h = (p2 - p1)/N;
+        size_t i = 0 ;
+        auto pts = std::vector<point_type>(N);
 
-        cofs<< "V = cell("<< msh.cells_size()<<", 2);"<< std::endl;
-        for(auto& cel : msh)
+        auto mindeg = 0;
+        auto maxdeg = m_degree + 1;
+
+        cell_basis_type   cb_max(maxdeg);
+
+        auto all_range = cb_max.range( mindeg,  maxdeg);
+
+        for(auto& p: pts)
         {
-            size_t qp_cont = 0;
-            auto cell_id   = cel.get_id();
-            auto cell_quadpoints     =  cq.integrate(msh, cel);
-            auto cqs  = cell_quadpoints.size();
-            auto pts  = points(msh,cel);
-            auto ps   = pts.size();
-            auto tsr =  tensor[cell_id];
+            p = p1 + i * h;
 
-            auto total_num_pts = cqs + ps;
+            for(auto cl: msh)
+            {
+                auto cell_pts = points(msh, cl);
+                auto vts = msh.get_vertices(cl, cell_pts);
 
-            cofs<<" A = [";
-            for (auto& qp : cell_quadpoints)
-            {
-                auto tp  = qp.point();
-                vector_type pot = tsr.col(qp_cont);
-                if( DIM == 1)
+                if(wn_PnPoly( msh, cl, p, vts ))
                 {
-                    for (size_t d = 0; d < DIM; d++)
-                        cofs << tp[d] << " ";
-                    cofs << pot <<std::endl;
-                }
-                if (DIM == 2)
-                {
-                    for (size_t d = 0; d < DIM; d++)
-                        cofs << tp[d] << " ";
-                    cofs << pot.norm() << std::endl;
-                }
-                ++qp_cont;
-            }
-            for (size_t i = 0, j = cqs; i < ps; i++, j++)
-            {
-                auto tp = pts.at(i);
-                for (size_t d = 0; d < DIM; d++)
-                    vtk_points << tp[d] << " ";
-                vector_type pot = tsr.col(j);
-                if( DIM == 1)
-                {
-                    for (size_t d = 0; d < DIM; d++)
-                        cofs << tp[d] << " ";
-                    cofs << pot <<std::endl;
-                }
-                if (DIM == 2)
-                {
-                    for (size_t d = 0; d < DIM; d++)
-                        cofs << tp[d] << " ";
-                    cofs << pot.norm() << std::endl;
+                    if(!is_inside(msh, cl, p))
+                    {
+                        std::cout << " ** Cell_points: " << std::endl;
+                        for(auto cp : cell_pts)
+                            std::cout << "  P: "<< cp.x() << cp.y()<< std::endl;
+                        std::cout << " ** Cell_vertices: " << std::endl;
+                        for(auto cp : vts)
+                            std::cout << "  V: "<< cp.x() << cp.y()<< std::endl;
+
+                        std::cout << " ** Point : " << std::endl;
+                        std::cout << "  P: "<< p.x() << p.y()<< std::endl;
+
+                    }
+
+                    auto cl_id  = cl.get_id();
+                    vector_type u_T   = rec_vel_Th.at(cl_id);
+                    auto phi  = cb_max.eval_functions(msh, cl, p, mindeg, maxdeg);
+                    pfs<< p.x() << " "<< p.y() << " "<< phi.dot(u_T)<<std::endl;
                 }
             }
-            cofs<< " ];"<<std::endl;
-
-            cofs<< " B = ["<<std::endl;
-            auto fcs = faces(msh, cel);
-            for (auto& fc : fcs)
-            {
-                auto pts = points(msh, fc);
-
-                for(auto& tp: pts)
-                {
-                    for (size_t d = 0; d < DIM; d++)
-                        cofs << tp[d] << " ";
-                }
-                cofs<<std::endl;
-            }
-            cofs<< " ];"<<std::endl;
-
-            cofs<< " V{"<<cell_id + 1 <<",1} = A;"<<std::endl;
-            cofs<< " V{"<<cell_id + 1 <<",2} = B;"<<std::endl;
-
-        }
-
-        cofs<< "X = ["<<std::endl;
-        for (auto& cl : msh)
-        {
-            auto bar = barycenter(msh,cl);
-            cofs<< i+1 << " " << bar.x()<< " "<< bar.y()<<std::endl;
             i++;
         }
-        cofs<< " ];"<<std::endl;
-        cofs<< "info = 'mesh"<< other_info<<"'"<<std::endl;
-        cofs<< "mesh" << other_info<<std::endl;
-        cofs<< "strValues = strtrim(cellstr(num2str([X(:,1)],'(%d)')));"<<std::endl;
-        cofs<< "text(X(:,2),X(:,3),strValues,'VerticalAlignment','bottom');"<<std::endl;
-        cofs<< "hold on; plot(X(:,2),X(:,3),'o')"<< std::endl;
-        cofs.close();
+        pfs.close();
+        return;
+    }
+
+
+    void
+    plot_over_line(const mesh_type    & msh,
+                   //const point_type   & p1,
+                   //const point_type   & p2,
+                   const std::vector<vector_type>   & vel_cell_Th,
+                   const std::vector<vector_type>   & grec_vel_Th,
+                   const std::string & filename)
+    {
+        std::ofstream pfs(filename);
+        if(!pfs.is_open())
+            std::cout << "Error opening file :"<< filename <<std::endl;
+
+        point_type p1 = point_type({-1.0, 0.0});
+        point_type p2 = point_type({ 1.0, 0.0});
+
+        auto N = 400;
+        auto h = (p2 - p1)/N;
+        size_t i = 0 ;
+        auto pts = std::vector<point_type>(N);
+
+        auto mindeg = 0;
+        auto maxdeg = m_degree;
+        auto zero_range = cb.range( mindeg,  maxdeg);
+
+        for(auto& p: pts)
+        {
+            p = p1 + i * h;
+
+            for(auto cl: msh)
+            {
+                auto cell_pts = points(msh, cl);
+                auto vts = msh.get_vertices(cl, cell_pts);
+
+                if(wn_PnPoly( msh, cl, p, vts ))
+                {
+                    if(!is_inside(msh, cl, p))
+                    {
+                        std::cout << " ** Cell_points: " << std::endl;
+                        for(auto cp : cell_pts)
+                            std::cout << "  P: "<< cp.x() << cp.y()<< std::endl;
+                        std::cout << " ** Cell_vertices: " << std::endl;
+                        for(auto cp : vts)
+                            std::cout << "  V: "<< cp.x() << cp.y()<< std::endl;
+
+                        std::cout << " ** Point : " << std::endl;
+                        std::cout << "  P: "<< p.x() << p.y()<< std::endl;
+
+                    }
+
+                    auto cl_id  = cl.get_id();
+                    vector_type u_T   = vel_cell_Th.at(cl_id);
+                    vector_type Gu_T  = grec_vel_Th.at(cl_id);
+
+                    auto phi  = cb.eval_functions(msh, cl, p, mindeg, maxdeg);
+                    matrix_type vec_phi  =  make_vectorial_matrix(phi, mesh_type::dimension);
+                    vector_type grad_fun =  vec_phi * Gu_T;
+
+                    pfs<< p.x() << " "<< p.y() << " "<< phi.dot(u_T)<< "  ";
+                    pfs<< grad_fun(0)<<" "<<grad_fun(1) <<" " << cl_id<<std::endl;
+                }
+            }
+            i++;
+        }
+        pfs.close();
+        return;
     }
 
 };
-
-template<typename MeshType, typename  TensorMatrix>
-void
-quiver_matlab(const MeshType& msh,
-              const std::string& filename,
-              const size_t quad_degree,
-              const std::vector<TensorMatrix> & global_tensor)
-{
-    typedef MeshType                           mesh_type;
-    typedef typename mesh_type::cell                    cell_type;
-    typedef typename mesh_type::face                    face_type;
-    typedef disk::quadrature<mesh_type, cell_type>      cell_quad_type;
-    typedef disk::quadrature<mesh_type, face_type>      face_quad_type;
-
-    cell_quad_type cell_quadrature(quad_degree);
-    face_quad_type face_quadrature(quad_degree);
-
-    std::ofstream ofs(filename);
-    if (!ofs.is_open())
-        std::cout << "Error opening file :"<< filename<<std::endl;
-
-    ofs << " hold on;"<<std::endl;
-    for (size_t i = 0; i < msh.cells_size(); i++ )
-    {
-        auto cl  = *std::next(msh.cells_begin(),i);
-        auto num_pts  =  global_tensor.at(i).cols();
-        auto pts_to_eval = new_points(msh, cl, quad_degree, num_pts);
-
-        ofs << "pts = [";
-        for (auto& p : pts_to_eval)
-            ofs << p.x() << "  "<< p.y() << std::endl;
-        ofs << "];"<<std::endl;
-
-        TensorMatrix tensor = global_tensor.at(i);
-
-        ofs << "tau = [";
-        for(size_t i = 0; i < tensor.cols(); i++)
-            ofs<< tensor(0, i)<< " "<< tensor(1, i) <<std::endl;
-        ofs << "];"<<std::endl;
-
-        ofs << "quiver(pts(:,1),pts(:,2),tau(:,1),tau(:,2));"<< std::endl;
-    }
-    ofs.close();
-}
 
 
 template<typename T>
@@ -866,747 +937,345 @@ struct solution_errors
     T Iu_uh;
     T Du_Guh;
 };
-
-
-template<typename T, size_t DIM, typename Storage, typename CellQuadType>
-class stress_based_errors
-{};
-
-
-template<typename T, typename Storage, typename CellQuadType>
-class stress_based_errors<T,1,Storage,CellQuadType>
+template<typename T, size_t DIM, typename Storage, typename MeshParameters>
+void
+postdiff(const  mesh<T,DIM,Storage>&  msh,
+            const std::vector<dynamic_vector<T>> & vel_cell_Th,
+            const MeshParameters  &  mp,
+            const size_t     degree,
+            const size_t     imsh)
 {
-    typedef CellQuadType                                cell_quad_type;
-    typedef typename cell_quad_type::quadpoint_type     quadpoint_type;
-    typedef typename cell_quad_type::weight_type        weight_type;
-    typedef mesh<T,1,Storage>                           mesh_type;
-    typedef typename mesh_type::cell                    cell_type;
-    typedef typename mesh_type::face                    face_type;
-    typedef typename mesh_type::point_type              point_type;
-    typedef typename mesh_type::scalar_type             scalar_type;
-    typedef dynamic_vector<scalar_type>                 vector_type;
-    typedef dynamic_matrix<scalar_type>                 matrix_type;
-    typedef disk::scaled_monomial_scalar_basis<mesh_type, face_type>    face_basis_type;
-    typedef disk::scaled_monomial_scalar_basis<mesh_type, cell_type>    cell_basis_type;
-
-    size_t  m_degree;
-    std::vector<quadpoint_type>     mmmmm;
-    plasticity_data<scalar_type>    m_pst;
-
-    public:
-
-        stress_based_errors(const plasticity_data<scalar_type>& pst,const size_t  degree): m_degree(degree), m_pst(pst)
-        {};
-
-        template<typename Solution, typename Gradient>//,typename LoaderType>
-        void
-        integrate(  const mesh_type &   msh,
-                    const cell_type &   cl,
-                    const Solution  &   sf,
-                    const Gradient  &   df,
-                    const vector_type&  x,
-                    solution_errors<scalar_type>& er)
-        {
-            T  xc = m_pst.Lref / 2.0  -  m_pst.yield * m_pst.f;
-            auto pts = points(msh, cl);
-            auto lp  = pts[0];
-            auto rp  = pts[1];
-            auto lyc = point<T,1>({xc});
-            auto ryc = point<T,1>({m_pst.Lref -xc});
-
-            if( lp.x() < lyc.x() &  rp.x() > lyc.x() )
-            {
-                compute(msh,cl,sf,df,lp,lyc,x,er);
-                lp = lyc;
-            }
-            if ( lp.x() < ryc.x()  &   rp.x() > 10.e-15 + ryc.x() )
-            {
-                compute(msh,cl,sf,df,lp,ryc,x,er);
-                lp    = ryc;
-            }
-
-            compute(msh,cl,sf,df,lp,rp,x,er);
-        }
-private:
-        std::vector<quadpoint_type>
-        special_integrate(const point<T,1>& lp,
-                          const point<T,1>& rp,
-                          const std::vector<std::pair<point<T,1>, T>>& m_quadrature_data)
-        {
-            auto measure = [](const point<T,1>& left_p,const point<T,1>& right_p)-> auto{
-                        //assert(pts.size() == 2);
-                        return (right_p - left_p).to_vector().norm();
-            };
-
-            auto meas       = measure(lp,rp);
-
-            std::vector<quadpoint_type> ret(m_quadrature_data.size());
-
-            auto tr = [&](const std::pair<point<T,1>, T>& qd) -> auto {
-                    auto point = (rp - lp) * qd.first.x() + lp;
-                    auto weight = qd.second * meas;
-                    return make_qp(point, weight);
-            };
-
-            auto retbegin = ret.begin();
-
-            std::transform(m_quadrature_data.begin(), m_quadrature_data.end(),
-                            retbegin, tr);
-            return ret;
-
-        }
-        template<typename Solution, typename Gradient>
-        void
-        compute(const mesh_type &   msh,
-                const cell_type &   cl,
-                const Solution  &   solution,
-                const Gradient  &   gradient,
-                const point<T,1>&   lp,
-                const point<T,1>&   rp,
-                const vector_type&  x,
-                solution_errors<scalar_type>& er)
-        {
-
-            typedef typename mesh_type::face             face_type;
-            typedef quadrature<mesh_type, face_type>     face_quad_type;
-
-            std::vector<std::pair<point<T,1>, T>> m_quadrature_data;
-            m_quadrature_data = edge_quadrature<T>(2*m_degree + 4);
-
-            cell_basis_type         cb1(m_degree);
-            cell_basis_type         cb(m_degree+1);
-
-            gradient_reconstruction_nopre<mesh_type,
-                                            cell_basis_type,
-                                            cell_quad_type,
-                                            face_basis_type,
-                                            face_quad_type> gradrec_nopre(m_degree);
-
-            matrix_type mass_matrix = matrix_type::Zero(cb1.size(), cb1.size());
-            vector_type u_rhs       = vector_type::Zero(cb1.size()) ;
-
-            auto quadpoints =  special_integrate(lp, rp, m_quadrature_data);
-
-            for (auto& qp : quadpoints)
-            {
-                auto phi = cb1.eval_functions(msh, cl, qp.point());
-                for (size_t i = 0; i < phi.size(); i++)
-                    for (size_t j = 0; j < phi.size(); j++)
-                        mass_matrix(i,j) += qp.weight() * mm_prod(phi[i], phi[j]);
-
-                auto ueval    =   solution(qp.point());
-
-                for (size_t i = 0; i < phi.size(); i++)
-                    u_rhs(i)  +=  qp.weight() * ueval  * phi[i];
-            }
-
-            //projection on the cell
-            Eigen::LDLT<matrix_type> mass_matrix_ldlt = mass_matrix.ldlt();
-            vector_type Iu_T = mass_matrix_ldlt.solve(u_rhs);
-
-            auto Iu    = mass_matrix_ldlt.solve(u_rhs);
-            auto xT    = x.head(cb1.size());
-            auto Iu_uh = Iu_T - xT;
-            //std::cout <<"/* ____cell = "<< msh.lookup(cl)<<"____*/"<<std::endl;
-            //std::cout << "lp = "<< lp.x()<< ";  rp = "<<  rp.x() << " ; xT = "<< xT.transpose() << std::endl;
-            //std::cout << "Iu_uh = "<< Iu_uh<< std::endl;
-            //std::cout << "before er.Iu_uh"<<er.Iu_uh << std::endl;
-
-            er.Iu_uh  += Iu_uh.transpose() * mass_matrix * Iu_uh;
-            //std::cout << "cell_id: " <<msh.lookup(cl);
-
-            for (auto& qp : quadpoints)
-            {
-
-                auto phi        =   cb1.eval_functions(msh, cl, qp.point());
-                auto dphi       =   cb.eval_gradients( msh, cl, qp.point());
-                auto ueval      =   solution(qp.point());
-                vector_type deval = gradient(qp.point());
-
-                auto col_range  =   cb.range(1,m_degree+1);
-                auto row_range  =   dof_range(0,mesh_type::dimension);
-
-                scalar_type uh_T    = 0.0;
-                auto xT         =   x.head(cb1.size());
-
-                for (size_t i = 0; i < cb1.size(); i++)
-                    uh_T  += phi[i] * xT(i);
-
-                gradrec_nopre.compute(msh, cl);
-
-                matrix_type dphi_matrix =   make_gradient_matrix(dphi);
-                matrix_type dphi_taken  =   take(dphi_matrix, row_range, col_range);
-                vector_type Guh  =   dphi_taken * gradrec_nopre.oper * x;
-
-                er.u_uh    += qp.weight() * (ueval - uh_T) * (ueval - uh_T);
-                er.Du_Guh  += qp.weight() * (deval - Guh).dot(deval - Guh);
-            }
-            //for (size_t i = 0; i < cb1.size(); i++)
-            //    Iu_uh += phi[i] * (Iu_T(i) - xT(i));
-        }
-    };
-
-    template<typename T, typename Storage, typename CellQuadType>
-    class stress_based_errors<T,2,Storage,CellQuadType>
-    {
-    public:
-        typedef mesh<T,2,Storage>                           mesh_type;
-        typedef typename mesh_type::cell                    cell_type;
-        typedef typename mesh_type::face                    face_type;
-        typedef typename mesh_type::point_type              point_type;
-        typedef typename mesh_type::scalar_type             scalar_type;
-        typedef dynamic_vector<scalar_type>                 vector_type;
-        typedef dynamic_matrix<scalar_type>                 matrix_type;
-        typedef CellQuadType                                cell_quad_type;
-        typedef scaled_monomial_scalar_basis<mesh_type, cell_type>    cell_basis_type;
-        typedef scaled_monomial_scalar_basis<mesh_type, face_type>    face_basis_type;
-
-        template<size_t N> using polygon = std::array<ident_impl_t, N>;
-
-        std::vector<point_type>                         m_points;
-        std::vector<polygon<3>>                         m_triangles;
-        std::vector<polygon<4>>                         m_quadrangles;
-        std::vector<polygon<5>>                         m_pentagons;
-        std::vector<polygon<6>>                         m_hexagons;
-        std::vector<polygon<7>>                         m_ennagons;
-        std::vector<std::array<ident_impl_t, 2>>        m_boundary_edges;
-        std::vector<std::array<ident_impl_t, 4>>        m_edges;
-
-        size_t  m_degree;
-        plasticity_data<scalar_type>    m_pst;
-
-        stress_based_errors(const plasticity_data<scalar_type>& pst,const size_t  degree): m_degree(degree), m_pst(pst)
-        {};
-
-        bool
-        cl_mark(const mesh_type & msh,const cell_type & cl)
-        {
-            bool mark = false;
-            auto r_yield  = m_pst.Bn*m_pst.Lref;
-            auto pts      = points(msh,cl);
-            std::vector<T> r(pts.size());
-            for(size_t i = 0; i < pts.size(); i++)
-                r.at(i)  = std::sqrt(pts[i].x() * pts[i].x() + pts[i].y() * pts[i].y());
-            auto result = std::minmax_element(r.begin(), r.end());
-
-            if(*(result.second) >  r_yield)
-                if (*(result.first) < r_yield)
-                    mark = true;
-
-            std::cout << "r = "<< std::endl;
-            for(auto& mm : r)
-                std::cout << mm<<" ";
-            std::cout << std::endl;
-            std::cout << "mark = "<< mark << std::endl;
-            return mark;
-        }
-        void
-        store(const std::vector<size_t> polygon_x)
-        {
-            size_t N = polygon_x.size();
-            if(N == 3)
-            {
-                std::array<ident_impl_t, 3> pol;
-                for(size_t i = 0; i < N; i++)
-                    pol[i] = polygon_x.at(i);
-                m_triangles.push_back(pol);
-            }
-            if(N == 4)
-            {
-                std::array<ident_impl_t , 4> pol;
-                for(size_t i = 0; i < N; i++)
-                    pol[i] = polygon_x.at(i);
-                m_quadrangles.push_back(pol);
-            }
-            if(N == 5)
-            {
-                std::array<ident_impl_t, 5> pol;
-                for(size_t i = 0; i < N; i++)
-                    pol[i] = polygon_x.at(i);
-                m_pentagons.push_back(pol);
-            }
-            if(N == 6)
-            {
-                std::array<ident_impl_t, 6> pol;
-                for(size_t i = 0; i < N; i++)
-                    pol[i] = polygon_x.at(i);
-                m_hexagons.push_back(pol);
-            }
-            if(N == 7)
-            {
-                std::array<ident_impl_t, 7> pol;
-                for(size_t i = 0; i < N; i++)
-                    pol[i] = polygon_x.at(i);
-                m_ennagons.push_back(pol);
-            }
-
-            for(size_t i = 0; i < N - 1; i++)
-            {
-                auto a = polygon_x.at(i);
-                auto b = polygon_x.at(i + 1);
-                if(b < a)
-                    std::swap(a,b);
-                m_edges.push_back({a, b});
-            }
-        }
-        //template<typename LoaderType>
-        std::vector<cell_type>
-        cl_partition(const mesh_type & msh,const cell_type & cl)
-        {
-            typedef generic_mesh<T,2>                       mesh_type;
-            typedef typename mesh_type::scalar_type         scalar_type;
-            typedef typename mesh_type::point_type          point_type;
-            typedef typename mesh_type::node_type           node_type;
-            typedef typename mesh_type::edge_type           edge_type;
-            typedef typename mesh_type::surface_type        surface_type;
-            //typedef LoaderType loader_type;
-            typedef fvca5_mesh_loader<scalar_type, 2>       loader_type;
-
-            std::vector<cell_type>      vec;
-            std::vector<size_t>         polygon_1,  polygon_2, *polygon_ptr;
-
-            polygon_ptr  = &polygon_1;
-            auto fcs     = faces(msh, cl);
-            auto fcs_ids = cl.faces_ids();
-            auto num_fcs = fcs_ids.size();
-            auto cl_pts  = points(msh,cl);
-            auto i = 0, j = 0;
-            auto r_yield  = m_pst.Bn*m_pst.Lref;
-            std::cout << "r_yield = "<< r_yield << std::endl;
-            std::cout << "cl      = "<< cl.get_id() << std::endl;
-            std::cout << "cl_pts.size = "<< cl_pts.size() << std::endl;
-
-            for(auto& fc : fcs)
-            {
-                auto pts = points(msh, fc);
-                auto r1  = std::sqrt(pts[0].x() * pts[0].x() + pts[0].y() * pts[0].y());
-                auto r2  = std::sqrt(pts[1].x() * pts[1].x() + pts[1].y() * pts[1].y());
-                polygon_ptr->push_back(j + i);
-                m_points.push_back(cl_pts.at(i));
-
-                std::cout << "face = "<< msh.lookup(fc) << std::endl;
-                std::cout << "fc_pts.size = "<< pts.size() << std::endl;
-                std::cout << "i  = "<<i <<"   j  = "<< j<< std::endl;
-                std::cout << "r1 = "<< r1<<"  r2 = "<< r2 << std::endl;
-                if(std::max(r1,r2) >  r_yield & std::min(r1,r2) < r_yield)
-                {
-                    std::cout << "inside: i = "<<i <<"  j = "<< j<< std::endl;
-                    j++;
-                    auto bar    = barycenter(msh,fc);
-                    polygon_ptr->push_back(j + i);
-                    polygon_1.swap(polygon_2);
-                    polygon_ptr->push_back(j + i);
-                    m_points.push_back(bar);
-                }
-                i++;
-            }
-            std::cout << "/* message */" << std::endl;
-            store(polygon_1);
-            store(polygon_2);
-            std::sort(m_edges.begin(), m_edges.end());
-            auto uniq_iter = std::unique(m_edges.begin(), m_edges.end());
-            m_edges.erase(uniq_iter, m_edges.end());
-
-            loader_type      loader;
-            loader.m_edges        = m_edges;
-            loader.m_triangles    = m_triangles;
-            loader.m_quadrangles  = m_quadrangles;
-            loader.m_pentagons    = m_pentagons;
-            loader.m_hexagons     = m_hexagons;
-            loader.m_boundary_edges = m_boundary_edges;
-            loader.m_ennagons   = m_ennagons;
-            loader.m_points     = m_points;
-
-            mesh_type temp_msh;
-            loader.populate_mesh(temp_msh);
-            size_t k = 0;
-            for(auto& cel : temp_msh)
-            {
-                vec.at(k) = cel;
-                k++;
-            }
-            return vec;
-        }
-        template<typename Solution, typename Gradient> //,typename LoaderType>
-        void
-        integrate(  const mesh_type &   msh,
-                    const cell_type &   cl,
-                    const Solution  &   sf,
-                    const Gradient  &   df,
-                    const vector_type&  x,
-                    solution_errors<scalar_type>& er)
-        {
-            typedef point<T,2>          point_type;
-
-            #if 0
-            auto r_yield = m_pst.Bn*m_pst.Lref;
-
-            std::cout << "cl_mark(msh,"<< msh.lookup(cl)<<") = "<< cl_mark(msh,cl)<< std::endl;
-            if(cl_mark(msh,cl))
-            {
-                //auto cl_vector = cl_partition<LoaderType>(msh, cl);
-                auto cl_vector = cl_partition(msh, cl);
-                compute(msh, cl, cl_vector.at(0), sf, df, x, er);
-                compute(msh, cl, cl_vector.at(1), sf, df, x, er);
-            }
-            #endif
-
-            compute(msh, cl, cl, sf, df, x, er);
-        }
-
-        template<typename Solution, typename Gradient>
-        void
-        compute(const mesh_type &   msh,
-                const cell_type &   cl,
-                const cell_type &   sub_cl,
-                const Solution  &   solution,
-                const Gradient  &   gradient,
-                const vector_type&  x,
-                solution_errors<scalar_type>& er)
-        {
-
-            typedef typename mesh_type::face             face_type;
-            typedef quadrature<mesh_type, face_type>     face_quad_type;
-
-            cell_quad_type          cq(2*m_degree + 4);
-            cell_basis_type         cb1(m_degree);
-            cell_basis_type         cb(m_degree+1);
-
-            gradient_reconstruction_nopre<mesh_type,
-                                            cell_basis_type,
-                                            cell_quad_type,
-                                            face_basis_type,
-                                            face_quad_type> gradrec_nopre(m_degree);
-
-            matrix_type mass_matrix = matrix_type::Zero(cb1.size(), cb1.size());
-            vector_type u_rhs       = vector_type::Zero(cb1.size()) ;
-
-            gradrec_nopre.compute(msh, cl);
-
-            auto quadpoints = cq.integrate(msh, sub_cl);
-
-
-            auto x0 = 0.5;
-            auto pts = points(msh, cl);
-            size_t number = 0;
-            for(auto& p : pts)
-            {
-                if(p.x() < x0)
-                number = 1;
-                if(p.x() > x0)
-                number = 2;
-            }
-            if(number == 0)
-                throw std::invalid_argument("Invalid number domain.");
-
-
-
-
-
-
-            for (auto& qp : quadpoints)
-            {
-                auto phi        =   cb1.eval_functions(msh, cl, qp.point());
-                auto dphi       =   cb.eval_gradients( msh, cl, qp.point());
-                auto ueval      =   solution(qp.point(), number);
-                vector_type deval = gradient(qp.point(), number);
-
-                auto col_range  =   cb.range(1,m_degree+1);
-                auto row_range  =   dof_range(0,mesh_type::dimension);
-
-                scalar_type uh_T    = 0.0;
-                auto xT         =   x.head(cb1.size());
-
-                for (size_t i = 0; i < cb1.size(); i++)
-                    uh_T  += phi[i] * xT(i);
-
-                matrix_type dphi_matrix =   make_gradient_matrix(dphi);
-                matrix_type dphi_taken  =   take(dphi_matrix, row_range, col_range);
-                vector_type Guh  =   dphi_taken * gradrec_nopre.oper * x;
-
-                er.u_uh    += qp.weight() * (ueval - uh_T) * (ueval - uh_T);
-                er.Du_Guh  += qp.weight() * (deval - Guh).dot(deval - Guh);
-            }
-            //for (size_t i = 0; i < cb1.size(); i++)
-            //    Iu_uh += phi[i] * (Iu_T(i) - xT(i));
-        }
-    };
-
-
-    template<typename T, typename Storage, typename CellQuadType>
-    class stress_based_errors<T,3,Storage,CellQuadType>
-    {
-    public:
-        typedef mesh<T,3,Storage>                           mesh_type;
-        typedef typename mesh_type::cell                    cell_type;
-        typedef typename mesh_type::scalar_type             scalar_type;
-        typedef dynamic_vector<scalar_type>                 vector_type;
-
-        stress_based_errors(){}
-        stress_based_errors(const plasticity_data<scalar_type>& pst,const size_t  degree)
-        {}
-
-        template<typename Solution, typename Gradient>
-        void
-        integrate(  const mesh_type &   msh,
-                    const cell_type &   cl,
-                    const Solution  &   sf,
-                    const Gradient  &   df,
-                    const vector_type&  x,
-                    solution_errors<scalar_type>& er)
-        {
-            int a;
-        }
-    };
-
-template<typename T, size_t DIM, typename Storage, typename TensorsType,
-            typename Solution>
-solution_errors<T>
-postprocess(const  mesh<T,DIM,Storage>&  msh,
-                            const Solution &     solution,
-                            const std::vector<TensorsType> &    tsr_vec,
-                            const std::vector<dynamic_vector<T>> &    Uh_Th,
-                            const plasticity_data<T> &  pst,
-                            const mesh_parameters<T>  &  mp,
-                            const size_t                degree,
-                            //std::ofstream &             efs,
-                            const size_t                imsh )
-
-{
-    std::cout << "/* plasticity_post_processing */" << std::endl;
-
-    typedef mesh<T, DIM, Storage>                       mesh_type;
-    typedef typename mesh_type::scalar_type             scalar_type;
-    typedef typename mesh_type::cell                    cell_type;
-    typedef quadrature<mesh_type, cell_type>            cell_quad_type;
-    typedef dynamic_vector<scalar_type>                 vector_type;
-    typedef dynamic_matrix<scalar_type>                 matrix_type;
-
-    solution_errors<scalar_type> er;
+    typedef mesh<T,DIM,Storage> mesh_type;
+    typedef typename mesh_type::cell cell_type;
+    typedef dynamic_vector<T> vector_type;
+    typedef dynamic_matrix<T> matrix_type;
+
+    post_processing<T, DIM, Storage> pp(degree);
 
     std::string  msh_str = tostr(imsh);
+    std::string  info    =  mp.summary + "_R" + msh_str;
+    std::string  solution_file  = mp.directory + "/solution" + info;
+
+    pp.paraview(msh, solution_file, vel_cell_Th, "scalar");
+}
+
+template<typename T, size_t DIM, typename Storage, typename MeshParameters,
+        typename PlasticData>
+void
+postprocess(const  mesh<T,DIM,Storage>&  msh,
+            const tensors<mesh<T,DIM,Storage>>   & stresses_Th,
+            const std::vector<dynamic_vector<T>> & velocity_Th,
+            const std::vector<dynamic_matrix<T>> & gradrec_opers,
+            const std::vector<dynamic_matrix<T>> & rec_opers,
+            const MeshParameters  &  mp,
+            const PlasticData   & pst,
+            const size_t     degree,
+            const size_t     imsh)
+
+{
+    typedef mesh<T,DIM,Storage> mesh_type;
+    typedef typename mesh_type::cell cell_type;
+    typedef dynamic_vector<T> vector_type;
+    typedef dynamic_matrix<T> matrix_type;
+
+    post_processing<T, DIM, Storage> pp(gradrec_opers, degree);
+
+    std::vector<vector_type> grad_rec_Th(msh.cells_size());
+    std::vector<vector_type> vel_cell_Th(msh.cells_size());
+    std::vector<vector_type> rec_vel_Th(msh.cells_size());
+
+    std::vector<std::pair<vector_type, vector_type>> stresses_Fh(msh.faces_size());
+
+    typedef scaled_monomial_scalar_basis<mesh_type, cell_type>    cell_basis_type;
 
 
-    for (auto& cl : msh)
+    auto cell_basis  = cell_basis_type(degree + 1);
+    auto cbs = cell_basis.range(0,degree).size();
+    auto all_range_size = cell_basis.size();
+    auto one_range_size = cell_basis.range(1, degree + 1).size();
+
+    size_t fcount = 0;
+
+    for(auto& cl : msh)
     {
-        auto id =   cl.get_id();
-        auto x  =   Uh_Th.at(id);
-        stress_based_errors<T,DIM,Storage,cell_quad_type>   sber(pst,degree);
-        //sber.integrate<LoaderType>(msh,cl,sf,df,x,er);
-        sber.integrate(msh, cl, solution.sf, solution.df, x, er);
+        auto cl_id = msh.lookup( cl);
+
+        matrix_type grec_op =  gradrec_opers.at(cl_id);
+        matrix_type rec_op  =  rec_opers.at(cl_id);
+        vector_type uh_TF   =  velocity_Th.at(cl_id);
+
+        grad_rec_Th.at(cl_id) = grec_op * uh_TF;
+        vel_cell_Th.at(cl_id) = uh_TF.head(cbs);
+
+        vector_type rec = vector_type::Zero(all_range_size);
+        rec.tail(one_range_size) = rec_op * uh_TF;
+        rec(0) = uh_TF(0);
+        rec_vel_Th.at(cl_id) = rec;
     }
 
-    er.u_uh     = std::sqrt(er.u_uh);
-    er.Iu_uh    = std::sqrt(er.Iu_uh);
-    er.Du_Guh   = std::sqrt(er.Du_Guh);
-//    auto diam   = diameter(msh , cl);
+    for(auto itor = msh.faces_begin(); itor != msh.faces_end(); itor++)
+    {
+        auto fc = *itor;
+        auto pts = points(msh, fc);
 
-//    std::cout << "Mesh diameter: " << diam << std::endl;
-    #if 0
-    std::cout  << "l2-norm error,   u_uh:" << er.u_uh  << std::endl;
-    std::cout  << "l2-norm error,  Iu_uh:" << er.Iu_uh  << std::endl;
-    std::cout  << "l2-norm error, Du_Guh:" << er.Du_Guh << std::endl;
-    //efs<<  er.u_uh  <<" "<< er.Iu_uh << " " << er.Du_Guh ;
-    #endif
-    post_processing<T,DIM,Storage> pp;
+        auto cells_ids = face_owner_cells_ids(msh, fc);
 
-    auto info =  mp.summary + "_R" + msh_str;
+        auto cl_1 = *std::next( msh.cells_begin(), cells_ids.first);
+        auto cl_2 = cl_1;
 
-    std::string constraint_file;
-    if (pst.method == true)
-        constraint_file = mp.directory + "/lambda" + info;
-    else
-        constraint_file = mp.directory + "/sigma"+ info;
+        if(!msh.is_boundary(fc))
+            cl_2 = *std::next( msh.cells_begin(), cells_ids.second);
+
+        vector_type v1 = stresses_Th.at_face(msh, cl_1, fc);
+        vector_type v2 = stresses_Th.at_face(msh, cl_2, fc);
+
+        stresses_Fh.at(fcount++) = std::make_pair(v1, v2);
+    }
+
+
+    std::string  msh_str = tostr(imsh);
+    std::string  info =  mp.summary + "_R" + msh_str;
 
     std::string solution_file  = mp.directory + "/solution" + info;
-    std::string gamma_file     = mp.directory + "/gamma"    + info;
-    std::string xi_norm_file   = mp.directory + "/xi_norm"  + info;
-    std::string xi_funct_file  = mp.directory + "/xi_function" + info;
-    std::string gauss_pts_file = mp.directory + "/cell_gp"  + info;
-    std::string quiver_gamma_file = mp.directory + "/quiver_gamma" + info;
-    std::string quiver_sigma_file = mp.directory + "/quiver_sigma" + info;
-    std::string quiver_sigma_agamma_file = mp.directory + "/quiver_sigma_agamma" + info;
+    std::string gradient_file  = mp.directory + "/gradient" + info;
+    std::string stresses_file  = mp.directory + "/stresses" + info;
+    std::string stresses_Fh_file  = mp.directory + "/stresses_Fh" + info;
 
-    pp.paraview(msh, solution_file, degree, Uh_Th);
 
-    typedef std::vector<Eigen::Matrix<T,Eigen::Dynamic, Eigen::Dynamic>>  dyn_mat_vec;
-    typedef Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>     tensor_matrix;
+    pp.paraview(msh, solution_file, vel_cell_Th, "scalar");
+    pp.paraview(msh, gradient_file, grad_rec_Th, "vector");
+    pp.paraview(msh, stresses_file, stresses_Th.at_all_cells(), "vector");
+    pp.paraview_faces(msh, stresses_Fh_file, stresses_Fh, "vector");
 
-    dyn_mat_vec     siglam_Th(msh.cells_size());
-    dyn_mat_vec     gamma_Th(msh.cells_size());
-    dyn_mat_vec     xi_norm_Th(msh.cells_size());
-    dyn_mat_vec     xi_function(msh.cells_size());
-    dyn_mat_vec     diff_sig_agam(msh.cells_size());
-    tensor_matrix   vec;
 
-    //WK: for p-adaptation quad_degree is not the same for all cells
-    size_t quad_degree = tsr_vec.at(0).quad_degree;
+    std::string plotline_file  = mp.directory + "/plot_over_line" + info;
+    std::string rec_plotline_file  = mp.directory + "/plot_over_line_rec" + info;
 
-    for(auto& cl:msh)
-    {
-        size_t id  = cl.get_id();
-        siglam_Th.at(id)  = tsr_vec.at(id).siglam;
-        gamma_Th.at(id)   = tsr_vec.at(id).gamma;
-        xi_norm_Th.at(id) = tsr_vec.at(id).xi_norm;
-        diff_sig_agam.at(id) = tsr_vec.at(id).siglam - pst.alpha * tsr_vec.at(id).gamma;
-        auto xi_norm_vec  = tsr_vec.at(id).xi_norm;
-        vec = tensor_matrix::Zero(1,xi_norm_vec.size());
-        for(size_t i = 0; i < xi_norm_vec.size(); i++)
+    pp.plot_over_line(msh, vel_cell_Th, grad_rec_Th, plotline_file+ ".dat");
+    pp.plot_over_line(msh, rec_vel_Th, rec_plotline_file +".dat");
+
+    save_data(velocity_Th, mp.directory + "/velocities" + info + ".txt");
+    save_data(stresses_Th, mp.directory + "/multiplier" + info + ".txt");
+
+
+    quiver_matlab(msh, mp.directory + "/quiver" + info + ".m", degree, stresses_Th);
+
+
+    auto MakeFigs_name = mp.directory + "/MakeFigs.m";
+
+
+
+    std::ofstream eeffs(MakeFigs_name);
+    if (!eeffs.is_open())
+        std::cout << "Error opening file :"<<MakeFigs_name <<std::endl;
+
+        eeffs << "draw_error_contr = true;"<<std::endl;;
+        eeffs << "exact = true;"<<std::endl;
+        eeffs <<std::endl;
+        eeffs << "if draw_error_contr == false"<<std::endl;;
+        eeffs << "  exact = false;"<<std::endl;
+        eeffs << "end"<<std::endl;;
+
+        eeffs << "\% Mesh "<<std::endl;
+        eeffs << "draw_mesh  = false;"<<std::endl;
+        eeffs << "print_mesh = false;"<<std::endl;
+
+        eeffs << "\% Error "<<std::endl;
+        eeffs << "draw_error = true;"<<std::endl;
+        eeffs << "print_error= false;"<<std::endl;
+
+        eeffs << "\% Solution "<<std::endl;
+        eeffs << "draw_solution   = false;"<<std::endl;
+        eeffs << "print_solution  = false;"<<std::endl;
+
+
+        eeffs << "\% Estimator "<<std::endl;
+        eeffs << "draw_estimator  = false;"<<std::endl;
+        eeffs << "print_estimator = false;"<<std::endl;
+        eeffs << "all_meshes = true; "<<std::endl;
+        eeffs << "%Exact solution errors"<<std::endl;
+        eeffs << "if exact == true"<<std::endl;
+        eeffs << " close all;"<<std::endl;
+        eeffs << " col = 10; exFunction"<<std::endl;
+
+        eeffs << " close all;"<<std::endl;
+        eeffs << " col = 11; exFunction"<<std::endl;
+        eeffs << "end"<<std::endl;
+
+        eeffs << "%Residual"<<std::endl;
+        eeffs << "col = 2; row = 1; exFunction"<<std::endl;
+
+        eeffs << "all_meshes = false;"<<std::endl;
+
+        for(size_t k = 0; k <= mp.num_remesh; k++)
         {
-            if (xi_norm_vec(i) >= pst.yield)
-                vec(0,i) = 1.;
+            eeffs << "close all"<<std::endl;
+            eeffs << "msh = zeros(1, "<< mp.num_remesh + 1 <<");"<<std::endl;
+            eeffs << "msh("<< k+1 <<") = 1;"<<std::endl;
+            eeffs << "print_error= false;"<<std::endl;
+            eeffs << "col = 2; exFunction"<<std::endl;
+            eeffs << "col = 4; exFunction"<<std::endl;
+            eeffs << "col = 5; exFunction"<<std::endl;
+            eeffs << "col = 6; exFunction"<<std::endl;
+            eeffs << "col = 8; exFunction"<<std::endl;
+            eeffs << "legend('Residual', '|G_h^k(u_h^{n+1}- u_h^n|',"<<std::endl;
+            eeffs << "'|S_h^k(u_h^{n+1}- u_h^n|', ' |\\sigma_h^{n+1}- \\sigma_h^n|',"<<std::endl;
+            eeffs << "'|\\varsigma_h^{n+1}- \\varsigma_h^n|')"<<std::endl;
+            eeffs << "xlabel('No. of iterations');"<<std::endl;
+            eeffs << "export_fig -dpdf Total_residual_Contr_"<<mp.summary<<"_R"<<imsh<<".pdf"<<std::endl;
+            eeffs <<std::endl;
         }
-        xi_function.at(id) = vec;
-    }
-    std::cout << "QUAD DEGREE : "<< quad_degree << std::endl;
-    pp.tensor_norm_vtk_writer(msh, constraint_file, quad_degree, siglam_Th);
-    pp.tensor_norm_vtk_writer(msh, gamma_file,      quad_degree, gamma_Th);
-    pp.tensor_norm_vtk_writer(msh, xi_norm_file,    quad_degree, xi_norm_Th);
-    pp.tensor_norm_vtk_writer(msh, xi_funct_file,   quad_degree, xi_function);
-    pp.gauss_points_to_matlab(msh, gauss_pts_file  + ".m",   quad_degree, xi_function, info);
-    quiver_matlab(msh, quiver_sigma_agamma_file + ".m", quad_degree, diff_sig_agam);
-    quiver_matlab(msh, quiver_sigma_file + ".m", quad_degree, siglam_Th);
-    quiver_matlab(msh, quiver_gamma_file + ".m", quad_degree, gamma_Th);
-    //auto xi_norm_vec = get_tensor<TensorsType,T>(tsr_vec, "xi_norm");
+        eeffs.close();
 
-    //pp.quiver_matlab(msh, name, quad_degree, vec);
+    auto exfunc_name = mp.directory + "/exFunction.m";
 
-    save_data(Uh_Th, mp.directory + "/Uh" + info + ".txt");
+    std::ofstream effs(exfunc_name);
+    if (!effs.is_open())
+        std::cout << "Error opening file :"<<exfunc_name <<std::endl;
 
-    std::vector<matrix_type> sigma;
-    get_from_tensor(sigma,  tsr_vec, "sigma");
-    save_data(sigma, mp.directory + "/Sigma" + info + ".txt");
+    effs << "error_name = 'nothing'"<<std::endl;
+    effs << "execute" + mp.summary<<std::endl;
+    effs << "if print_error == true "<<std::endl;
+    effs << "   legend('-DynamicLegend')" <<std::endl;
+    effs << "   set(gca,'box','on'); set(gcf,'color','w');"<<std::endl;
+    effs << "   set(gca,'fontsize',12); set(gca,'xgrid', 'on', 'ygrid', 'on');"<<std::endl;
+    effs << "   if(col == 2)"<<std::endl;
+    effs << "     \%title(' Total residual with k = "<< degree<<"; Bi = "<<pst.Bn<<"');"<<std::endl;
+    effs << "     export_fig -dpdf Total_residual_"<<mp.summary<<"_R"<<imsh<<".pdf"<<std::endl;
+    effs << "   end"<<std::endl;
+    effs << "   if(col == 3)"<<std::endl;
+    effs << "     \%title(' Residual with k = "<< degree<<"; Bi = "<<pst.Bn<<"');"<<std::endl;
+    effs << "     export_fig -dpdf Residual_"<<mp.summary<<"_R"<<imsh<<".pdf"<<std::endl;
+    effs << "   end"<<std::endl;
+    effs << "     \%title(' |G_h^k(u_h^{n+1}- u_h^n| with k = "<< degree<<"; Bi = "<<pst.Bn<<"');"<<std::endl;
+    effs << "   if(col == 4)"<<std::endl;
+    effs << "     export_fig -dpdf GUerror_"<<mp.summary<<"_R"<<imsh<<".pdf"<<std::endl;
+    effs << "   end"<<std::endl;
+    effs << "   if(col == 5)"<<std::endl;
+    effs << "     \%title(' |S_h^k(u_h^{n+1}- u_h^n| with k = "<< degree<<"; Bi = "<<pst.Bn<<"');"<<std::endl;
+    effs << "     export_fig -dpdf SUerror_"<<mp.summary<<"_R"<<imsh<<".pdf"<<std::endl;
+    effs << "   end"<<std::endl;
+    effs << "   if(col == 6)"<<std::endl;
+    effs << "     \%title(' |\\sigma_h^{n+1}- \\sigma_h^n| with k = "<< degree<<"; Bi = "<<pst.Bn<<"');"<<std::endl;
+    effs << "     export_fig -dpdf Sigma_"<<mp.summary<<"_R"<<imsh<<".pdf"<<std::endl;
+    effs << "   end"<<std::endl;
+    effs << "   if(col == 8)"<<std::endl;
+    effs << "     \%title(' |\\varsigma_h^{n+1}- \\varsigma_h^n)| with k = "<< degree<<"; Bi = "<<pst.Bn<<"');"<<std::endl;
+    effs << "     export_fig -dpdf Varsigma_"<<mp.summary<<"_R"<<imsh<<".pdf"<<std::endl;
+    effs << "   end"<<std::endl;
+    effs << "   if(col == 10)"<<std::endl;
+    effs << "     \%title(' |u_h^{n+1}- I_hu)| with k = "<< degree<<"; Bi = "<<pst.Bn<<"');"<<std::endl;
+    effs << "       xlabel('No.of iterations'); ylabel('|u_h^{n+1}- I_hu|');"<<std::endl;
+    effs << "       hline = findobj(gcf, 'type', 'line');"<<std::endl;
+    effs << "       set(hline(3),'Color', 'k'); "<<std::endl;
+    effs << "       set(hline(2),'Color', 'b'); "<<std::endl;
+    effs << "       set(hline(1),'Color', 'r'); "<<std::endl;
+    effs << "     export_fig -dpdf Uerror_"<<mp.summary<<"_R"<<imsh<<".pdf"<<std::endl;
+    effs << "   end"<<std::endl;
+    effs << "   if(col == 11)"<<std::endl;
+    effs << "     \%title(' |\\sigma_h^{n+1}- I_h\\sigma)| with k = "<< degree<<"; Bi = "<<pst.Bn<<"');"<<std::endl;
+    effs << "       xlabel('No.of iterations'); ylabel('|\\sigma_h^{n+1} - I_h\\sigma|');"<<std::endl;
+    effs << "       hline = findobj(gcf, 'type', 'line');"<<std::endl;
+    effs << "       %      set(hline(3),'Color', 'k'); "<<std::endl;
+    effs << "       %      set(hline(2),'Color', 'b'); "<<std::endl;
+    effs << "       %      set(hline(1),'Color', 'r'); "<<std::endl;
+    effs << "       set(hline(2),'Color', 'k'); "<<std::endl;
+    effs << "       set(hline(1),'Color', 'b'); "<<std::endl;
+    effs << "       legend('Location', 'southeast')"<<std::endl;
+    effs << "       export_fig -dpdf Sig_error_"<<mp.summary<<"_R"<<imsh<<".pdf"<<std::endl;
+    effs << "   end"<<std::endl;
+    effs << "end"<<std::endl;
+    effs.close();
 
-    std::vector<T> quadeg;
-    get_from_tensor(quadeg,  tsr_vec, "quad_degree");
-    save_data(quadeg, mp.directory + "/QuadDegree" + info +".txt");
-
-    return er;
-};
-
-#if 0
-template<typename T, size_t DIM, typename Storage, typename TensorsType,
-            typename Function, typename Gradient>
-void
-gnu_plot( mesh<T,DIM,Storage>&  msh,
-                            const Function &            sf,
-                            const Gradient &            df,
-                            std::vector<dynamic_vector<T>> &    Uh_Th,
-                            const size_t                degree)
-{
-    typedef mesh<T, DIM, Storage>                       mesh_type;
-    typedef typename mesh_type::scalar_type             scalar_type;
-    typedef typename mesh_type::cell                    cell_type;
-    typedef quadrature<mesh_type, cell_type>            cell_quad_type;
-    typedef dynamic_vector<scalar_type>                 vector_type;
-    typedef dynamic_matrix<scalar_type>                 matrix_type;
-
-    /*****************************************************************/
-    typedef disk::scaled_monomial_scalar_basis<mesh_type, cell_type>    cell_basis_type;
-    cell_quad_type      cq(2*degree );
-    cell_basis_type     cb1(degree);
-
-    std::vector<dynamic_vector<T>> Iu_Th(Uh_Th.size());
-    size_t i = 0;
-
-    for(auto& cl: msh)
-    {
-        matrix_type mass_matrix = matrix_type::Zero(cb1.size(), cb1.size());
-        vector_type u_rhs       = vector_type::Zero(cb1.size()) ;
-
-        auto quadpoints =  cq.integrate(msh,cl);
-
-        for (auto& qp : quadpoints)
-        {
-            auto phi = cb1.eval_functions(msh, cl, qp.point());
-            for (size_t i = 0; i < cb1.size(); i++)
-                for (size_t j = 0; j < cb1.size(); j++)
-                    mass_matrix(i,j) += qp.weight() * mm_prod(phi[i], phi[j]);
-
-            auto ueval    =   sf(qp.point());
-            for (size_t i = 0; i < cb1.size(); i++)
-                u_rhs(i)  +=  qp.weight() * ueval  * phi[i];
-            }
-
-            //projection on the cell
-            Eigen::LDLT<matrix_type> mass_matrix_ldlt = mass_matrix.ldlt();
-            Iu_Th.at(i) = mass_matrix_ldlt.solve(u_rhs);
-            i++;
-
-            auto Iu = mass_matrix_ldlt.solve(u_rhs);
-            std::cout<< " Iu = "<< Iu <<std::endl;
-
-        }
-
-        /*****************************************************************/
-        post_processing_base<T,DIM,Storage>  pp_base;
-
-        size_t num_sub_elems, num_sub_nodes;
-        size_t total_sub_nodes, total_sub_elems;
-        auto   test_points  = pp_base.make_vtk_points(msh,degree);
-        std::vector<T> pot_Iu(test_points.size()), pot_u(test_points.size());
-
-        total_sub_nodes = pp_base.m_total_sub_nodes;
-        total_sub_elems = pp_base.m_total_sub_elems;
-        num_sub_nodes   = pp_base.m_num_sub_nodes;
-        auto sub_nodes       = pp_base.m_sub_nodes;
-        auto vertices        = pp_base.m_vertices;
-
-
-        size_t cl_cont = 0;
-        size_t fc_cont = 0;
-        size_t cont = 0;
-
-        for(auto& cel : msh)
-        {
-            vector_type uh_TF =  Uh_Th[cl_cont];
-            dynamic_vector<scalar_type> rec(cb1.size()), rec_Iu(cb1.size()) ;
-            rec    = uh_TF.head(cb1.size());
-            rec_Iu = Iu_Th.at(cl_cont);
-            auto cl_faces =faces(msh,cel);
-            for(auto& fc : cl_faces)
-            {
-                for (size_t itp = 0; itp < num_sub_nodes; itp++)
-                {
-                    auto pot  = 0.;
-                    auto idx  = itp + num_sub_nodes*fc_cont;
-                    auto tp   = test_points[idx];
-                    auto phi  = cb1.eval_functions(msh, cel, tp);
-
-                    for (size_t i = 0; i < cb1.size(); i++)
-                    {
-                        pot_u.at(cont)  +=  phi[i] * rec(i);
-                        pot_Iu.at(cont) +=  phi[i] * rec_Iu(i);
-                    }
-
-                    ++cont;
-                }
-                ++fc_cont;
-            }
-            ++cl_cont;
-        }
-
-        std::vector<T> y_val = pot_u;
-
-        std::vector<T> x_val( test_points.size());
-
-        for(size_t i = 0; i <  test_points.size(); i++ )
-        {
-            auto p = test_points.at(i) ;
-            x_val.at(i) = p.x();
-        }
-        /*****************************************************************/
-
-        /* Plot it */
-        //if (rp.draw)
-
-        Gnuplot gp;
-        gp << "set grid" << std::endl;
-    //    gp << "plot '-' with lines title 'projection'" << std::endl;
-        //gp.send1d(std::make_pair(x_val, y_val));
-
-        /*****************************************************************/
 }
-#endif
+template<typename MeshParameters, typename PlasticData>
+void
+execute(std::ofstream & exfs,
+        const MeshParameters& mp,
+        const PlasticData& pst,
+        const size_t imsh)
+{
+    exfs<< "if msh("<<imsh + 1<<") == 1 "<<std::endl;
+
+    if(imsh > 0)
+    {
+        exfs<< "if draw_estimator == true"<<std::endl;
+        exfs<< "    figure;estimator_tot"<<mp.summary<<"_RC"<<imsh<<";";
+        exfs<< "    if print_estimator == true";
+        exfs<< "        set(gca,'box','on'); set(gcf,'color','w');set(gca,'fontsize',12);"<<std::endl;
+        exfs<< "        circle(0,0,"<<pst.Bn<<",'w')"<<std::endl;
+        exfs<< "        export_fig -dpdf estimator_tot"<<mp.summary<<"_RC"<<imsh<<".pdf"<<std::endl;
+        exfs<< "    end;"<<std::endl;
+        exfs<< "    figure;estimator_res"<<mp.summary<<"_RC"<<imsh<<";";
+        exfs<< "    if print_estimator == true";
+        exfs<< "        set(gca,'box','on'); set(gcf,'color','w');set(gca,'fontsize',12);"<<std::endl;
+        exfs<< "        circle(0,0,"<<pst.Bn<<",'w')"<<std::endl;
+        exfs<< "        export_fig -dpdf estimator_res"<<mp.summary<<"_RC"<<imsh<<".pdf"<<std::endl;
+        exfs<< "    end;"<<std::endl;
+        exfs<< "    figure;estimator_str"<<mp.summary<<"_RC"<<imsh<<";";
+        exfs<< "    if print_estimator == true";
+        exfs<< "        set(gca,'box','on'); set(gcf,'color','w');set(gca,'fontsize',12);"<<std::endl;
+        exfs<< "        circle(0,0,"<<pst.Bn<<",'w')"<<std::endl;
+        exfs<< "        export_fig -dpdf estimator_str"<<mp.summary<<"_RC"<<imsh<<".pdf"<<std::endl;
+        exfs<< "    end;"<<std::endl;
+        exfs<< "end"<<std::endl;
+    }
+
+    exfs<< "if draw_error == true "<<std::endl;
+    exfs<< "    e"<< imsh <<"= load('error"<<mp.summary<<"_R"<<imsh<<".dat');"<<std::endl;
+    exfs<< "    figure(100); hold on; "<< std::endl;
+    exfs<< "    loglog(e"<<imsh<<"(:,row),e"<<imsh<<"(:,col), 'DisplayName', 'step "<<imsh<<"' , 'color', rand(1,3));"<<std::endl;
+    exfs<< "    set(gca,'box','on'); set(gcf,'color','w');"<<std::endl;
+    exfs<< "    set(gca,'fontsize',12); set(gca,'xgrid', 'on', 'ygrid', 'on');"<<std::endl;
+    exfs<< "    set(gca, 'xscale', 'log'); set(gca, 'yscale', 'log')"<<std::endl;
+    exfs<< "end" << std::endl;
+    exfs<< std::endl;
+
+    exfs<< "if draw_mesh == true "<<std::endl;
+    exfs<< "    figure; mesh"<<mp.summary<<"_R" <<imsh<<";";
+    exfs<< "    if print_mesh == true";
+    exfs<< "        set(gca,'box','on'); set(gcf,'color','w');set(gca,'fontsize',12);"<<std::endl;
+    exfs<< "        circle(0,0,"<<pst.Bn<<",'r')"<<std::endl;
+    exfs<< "        export_fig -dpdf mesh_B"<<tostr(10*pst.Bn)<<mp.summary<<"_R" <<imsh<<".pdf"<<std::endl;
+    exfs <<"    end"<<std::endl;
+    exfs <<"end"<<std::endl;
+    exfs<< std::endl;
+
+    exfs<< "if draw_solution == true "<<std::endl;
+    exfs<< "    m = 101; n = 102; "<<std::endl;
+    exfs<< "    e"<< imsh <<"= load('plot_over_line"<<mp.summary<<"_R"<<imsh<<".dat');"<<std::endl;
+    exfs<< "    figure(m); "<<std::endl;
+    exfs<< "    hold on; plot(e"<<imsh<<"(:,1),e"<<imsh<<"(:,3), 'DisplayName', 'step "<<imsh<<"' , 'color', rand(1,3));"<<std::endl;
+    exfs<< "    set(gca,'box','on'); set(gcf,'color','w');"<<std::endl;
+    exfs<< "    set(gca,'fontsize',12); set(gca,'xgrid', 'on', 'ygrid', 'on');"<<std::endl;
+    exfs<< "    xlabel('x');  ylabel('u')" << std::endl;
+    exfs<< std::endl;
+    exfs<< "    er"<< imsh <<"= load('plot_over_line_rec"<<mp.summary<<"_R"<<imsh<<".dat');"<<std::endl;
+    exfs<< "    hold on; plot(er"<<imsh<<"(:,1),er"<<imsh<<"(:,3), 'DisplayName', 'step "<<imsh<<"' , 'color', rand(1,3));"<<std::endl;
+    exfs<< "    set(gca,'box','on'); set(gcf,'color','w');"<<std::endl;
+    exfs<< "    set(gca,'fontsize',12); set(gca,'xgrid', 'on', 'ygrid', 'on');"<<std::endl;
+    exfs<< "    xlabel('x');  ylabel('u')" << std::endl;
+    exfs<< "    if print_solution == true";
+    exfs<< "        set(gca,'box','on'); set(gcf,'color','w');set(gca,'fontsize',12);"<<std::endl;
+    exfs<< "        export_fig -dpdf plotoline_sol_"<<mp.summary<<"_R"<<imsh<<".pdf"<<std::endl;
+    exfs<< "    end;"<<std::endl;
+    exfs<< std::endl;
+    exfs<< "    figure(n);"<<std::endl;
+    exfs<< "     hold on; plot(e"<<imsh<<"(:,1),sqrt(e"<<imsh<<"(:,5).^2 + e"<<imsh<<"(:,4).^2), 'DisplayName', 'step "<<imsh<<"' , 'color', rand(1,3));"<<std::endl;
+    exfs<< "    set(gca,'box','on'); set(gcf,'color','w');"<<std::endl;
+    exfs<< "    set(gca,'fontsize',12); set(gca,'xgrid', 'on', 'ygrid', 'on');"<<std::endl;
+    exfs<< "    xlabel('x');  ylabel('|G_h u_h|')" << std::endl;
+    exfs<< "    if print_solution == true";
+    exfs<< "        set(gca,'box','on'); set(gcf,'color','w');set(gca,'fontsize',12);"<<std::endl;
+    exfs<< "        export_fig -dpdf plotoline_grad_"<<mp.summary<<"_R"<<imsh<<".pdf"<<std::endl;
+    exfs<< "    end;"<<std::endl;
+    exfs<< "    exact("<<pst.Bn <<","<< 30<<", m, n )" << std::endl;
+    exfs<< "end" << std::endl;
+
+    exfs <<"end"<<std::endl;
+    exfs <<std::endl;
+
+
+}
 
 } // namespace disk

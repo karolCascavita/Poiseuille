@@ -123,6 +123,13 @@ public:
         //std::cout << "/* point_ids function*/" << std::endl;
     }
 
+    std::vector<sub_id_type>
+    get_m_sids_ptrs(void) const
+    {
+        assert( m_sids_ptrs.size() != 0 );
+        return m_sids_ptrs;
+        //std::cout << "/* point_ids function*/" << std::endl;
+    }
 
     void set_element_id(const id_type id)
     {
