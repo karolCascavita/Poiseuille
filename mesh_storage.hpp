@@ -42,10 +42,44 @@ class mesh_storage
 {
     static_assert(DIM > 0 && DIM <= 3, "mesh: Allowed dimensions are 1, 2 and 3");
 };
+enum class boundary
+{
+    NONE,
+    DIRICHLET,
+    NEUMANN,
+    ROBIN
+};
+
+std::ostream& operator<<(std::ostream& os, boundary& c)
+{
+    switch(c)
+    {
+        case boundary::NONE       : os << "NONE";    break;
+        case boundary::DIRICHLET  : os << "DIRICHLET"; break;
+        case boundary::NEUMANN : os << "NEUMANN";  break;
+        case boundary::ROBIN  : os << "ROBIN";   break;
+        default    : os.setstate(std::ios_base::failbit);
+    }
+    return os;
+}
+
 struct bnd_info
 {
-    size_t  boundary_id;
-    bool    is_boundary;
+    size_t   boundary_id;
+    bool     is_boundary;
+    boundary bndtype;
+    bnd_info()
+    {
+        boundary_id = 10000;
+        is_boundary = false;
+        bndtype = boundary::NONE;
+    };
+    bnd_info(const size_t id, const bool& is_bnd, const boundary& type)
+    {
+        boundary_id = id;
+        is_boundary = is_bnd;
+        bndtype = type;
+    };
 };
 /* Template specialization of mesh_storage for 3D meshes.
  *
@@ -102,6 +136,7 @@ struct mesh_storage<T, 2, ElementTypes>
     std::vector<bnd_info>                       boundary_info;
     std::vector<bool>                           boundary_edges;
     std::vector<std::pair<bool, std::vector<point_id_type>>>  special_surfaces;
+    std::vector<std::pair<int,int>>             edges_owners;
     void statistics(void) const
     {
         std::cout << "This is a storage for a 2D mesh" << std::endl;

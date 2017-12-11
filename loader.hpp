@@ -58,6 +58,8 @@
 
 namespace disk {
 
+
+
 template<typename mesh_type>
 class mesh_loader
 {
@@ -176,8 +178,18 @@ public:
     std::vector<polygon<13>>                        m_triadecagons;
     std::vector<polygon<14>>                        m_tesseradecagons;
     std::vector<polygon<15>>                        m_pentadecagons;
+    std::vector<polygon<16>>                        m_16gons;
+    std::vector<polygon<17>>                        m_17gons;
+    std::vector<polygon<18>>                        m_18gons;
+    std::vector<polygon<19>>                        m_19gons;
+    std::vector<polygon<20>>                        m_20gons;
+    std::vector<polygon<21>>                        m_21gons;
+    std::vector<polygon<22>>                        m_22gons;
+    std::vector<polygon<23>>                        m_23gons;
+    std::vector<polygon<24>>                        m_24gons;
+    std::vector<polygon<25>>                        m_25gons;
 
-    std::vector<std::array<ident_impl_t, 2>>        m_boundary_edges;
+    std::vector<std::array<ident_impl_t, 3>>        m_boundary_edges;
     std::vector<std::array<ident_impl_t, 4>>        m_edges;
     std::vector<int> m_index_transf;
 
@@ -286,8 +298,110 @@ private:
         }
         if ( keyword == "octagons" )
         {
-            m_heptagons.clear();
+            m_octagons.clear();
             fvca5_read_tuples(ifs, m_octagons);
+            ifs >> keyword;
+        }
+        if ( keyword == "enneagons" )
+        {
+            m_enneagons.clear();
+            fvca5_read_tuples(ifs, m_enneagons);
+            ifs >> keyword;
+        }
+        if ( keyword == "decagons" )
+        {
+            m_decagons.clear();
+            fvca5_read_tuples(ifs, m_decagons);
+            ifs >> keyword;
+        }
+        if ( keyword == "hendecagons" )
+        {
+            m_hendecagons.clear();
+            fvca5_read_tuples(ifs, m_hendecagons);
+            ifs >> keyword;
+        }
+        if ( keyword == "dodecagons" )
+        {
+            m_dodecagons.clear();
+            fvca5_read_tuples(ifs, m_dodecagons);
+            ifs >> keyword;
+        }
+        if ( keyword == "triadecagons" )
+        {
+            m_triadecagons.clear();
+            fvca5_read_tuples(ifs, m_triadecagons);
+            ifs >> keyword;
+        }
+        if ( keyword == "tesseradecagons" )
+        {
+            m_tesseradecagons.clear();
+            fvca5_read_tuples(ifs, m_tesseradecagons);
+            ifs >> keyword;
+        }
+        if ( keyword == "pentadecagons" )
+        {
+            m_pentadecagons.clear();
+            fvca5_read_tuples(ifs, m_pentadecagons);
+            ifs >> keyword;
+        }
+        if ( keyword == "16gons" )
+        {
+            m_16gons.clear();
+            fvca5_read_tuples(ifs, m_16gons);
+            ifs >> keyword;
+        }
+        if ( keyword == "17gons" )
+        {
+            m_17gons.clear();
+            fvca5_read_tuples(ifs, m_17gons);
+            ifs >> keyword;
+        }
+        if ( keyword == "18gons" )
+        {
+            m_18gons.clear();
+            fvca5_read_tuples(ifs, m_18gons);
+            ifs >> keyword;
+        }
+        if ( keyword == "19gons" )
+        {
+            m_19gons.clear();
+            fvca5_read_tuples(ifs, m_19gons);
+            ifs >> keyword;
+        }
+        if ( keyword == "20gons" )
+        {
+            m_20gons.clear();
+            fvca5_read_tuples(ifs, m_20gons);
+            ifs >> keyword;
+        }
+        if ( keyword == "21gons" )
+        {
+            m_21gons.clear();
+            fvca5_read_tuples(ifs, m_21gons);
+            ifs >> keyword;
+        }
+        if ( keyword == "22gons" )
+        {
+            m_22gons.clear();
+            fvca5_read_tuples(ifs, m_22gons);
+            ifs >> keyword;
+        }
+        if ( keyword == "23gons" )
+        {
+            m_23gons.clear();
+            fvca5_read_tuples(ifs, m_23gons);
+            ifs >> keyword;
+        }
+        if ( keyword == "24gons" )
+        {
+            m_24gons.clear();
+            fvca5_read_tuples(ifs, m_24gons);
+            ifs >> keyword;
+        }
+        if ( keyword == "25gons" )
+        {
+            m_25gons.clear();
+            fvca5_read_tuples(ifs, m_25gons);
             ifs >> keyword;
         }
 
@@ -297,6 +411,14 @@ private:
             m_boundary_edges.clear();
             fvca5_read_tuples(ifs, m_boundary_edges);
             ifs >> keyword;
+
+            std::cout << "m_boundary_edges: " << std::endl;
+            for(size_t i = 0; i < m_boundary_edges.size(); i++)
+            {
+                std::cout << m_boundary_edges[i][0] << m_boundary_edges[i][1] <<m_boundary_edges[i][2] << std::endl;
+            }
+            std::cout << std::endl;
+
         }
         else
         {
@@ -380,50 +502,85 @@ private:
             }
         );
         m_index_transf = index;
+        #if  0
         std::cout << "INDEX_TRANSF:" << std::endl;
         for(auto& id: index)
             std::cout << id<<"  ";
         std::cout<< std::endl;
+        #endif
     }
     std::pair<bool, std::vector<typename point_type::id_type>>
     is_special_polygon(const mesh_type& msh, const surface_type& cl)
     {
+        //std::cout << "INSIDE is_special_polygon" << std::endl;
         auto pts  = points(msh,cl);
-        auto nonc_pts = pts;
-         auto fcs = faces(msh, cl);
-         std::vector<std::array<T,2>> ns(fcs.size());
-         size_t i = 0;
-         for(auto& fc : fcs)
-         {
-             auto n = normal(msh,cl,fc);
-             ns.at(i)[0] = n(0);
-             ns.at(i)[1] = n(1);
-             i++;
-         }
-        std::sort(ns.begin(), ns.end());
-        auto uniq_iter = std::unique(ns.begin(), ns.end(),[](std::array<T,2>& l, std::array<T,2>& r)
-            {return std::sqrt(std::pow((l[0] - r[0]),2.) + std::pow((l[1] - r[1]),2.)) < 1.e-10; });
-        ns.erase(uniq_iter, ns.end());
+        auto num_pts = pts.size();
+        auto fcs = faces(msh, cl);
+        std::vector<std::array<T,2>> ns(fcs.size());
+        size_t i = 0;
+        for(auto& fc : fcs)
+        {
+            auto n = normal(msh,cl,fc);
+            ns.at(i)[0] = n(0);
+            ns.at(i)[1] = n(1);
+            i++;
+        }
+        #if  0
+        std::cout << "CELL : "<< cl.get_id() << std::endl;
+        std::cout << " * points size: "<< pts.size() << std::endl;
+        std::cout << " * points:  " << std::endl;
+        for(auto p : pts )
+        std::cout << "  "<< p.x() << " "<< p.y() << std::endl;
+        std::cout << " * normals:  " << std::endl;
+        for(auto n : ns )
+        std::cout << "  "<< n[0] << " "<< n[1] << std::endl;
+        #endif
+        size_t hanging_count = 0;
+        for (size_t i = 0; i < num_pts; i++)
+        {
+            auto l = ns.at(i);
+            auto r = ns.at(( i + 1 )% num_pts);
+
+            if( std::abs((l[0]*r[0] + l[1]*r[1]) - T(1)) < 1.e-5)
+                hanging_count++;
+        }
+        if(hanging_count > pts.size())
+            throw std::logic_error(" More than one hanging node by face. Check correct counting of hanging nodes.");
+        size_t num_vertices = pts.size() - hanging_count;
+        if(num_vertices <= 0)
+            throw std::logic_error(" Number of vertices are <= 0. Check correct counting of hanging nodes.");
+
+        //std::cout << "num_vertices : "<< num_vertices << std::endl;
+
          //Identify vertices
-         std::vector<typename point_type::id_type> vertices(ns.size());
-         auto num_pts = pts.size();
+         std::vector<typename point_type::id_type> vertices( num_vertices);
+
          size_t vcount = 0;
          for(size_t i = 0; i < num_pts; i++)
          {
              size_t idx = (i == 0)? num_pts - 1 : i - 1 ;
-             auto pb = pts.at(idx);
-             auto p  = pts.at(i);
-             auto pf = pts.at((i + 1) % num_pts);
 
-             auto u  = (pb - p).to_vector();
-             auto v  = (pf - p).to_vector();
-             auto uxv_norm = cross(u, v).norm();
-
-             if(uxv_norm > 1.e-10)
-                 vertices.at(vcount++) =  typename point_type::id_type(i);
+             auto l = ns.at(idx);
+             auto r = ns.at(i);
+             #if 0
+             std::cout << "* n1 : "<< l[0] << " "<< l[1] << std::endl;
+             std::cout << "* n2 : "<< r[0] << " "<< r[1] << std::endl;
+             std::cout << "* product -1 : "<<   std::abs((l[0]*r[0] + l[1]*r[1]) - T(1)) << std::endl;
+             #endif
+             if( std::abs((l[0]*r[0] + l[1]*r[1]) - T(1)) >= 1.e-5)
+            {
+                //std::cout << "* counting   : "<< vcount  << std::endl;
+                vertices.at(vcount) =  typename point_type::id_type(i);
+                vcount++;
+            }
          }
-        if(vcount != ns.size())
-             std::logic_error(" Incorrect procedure to find vertices");
+        if(vcount != num_vertices)
+        {
+            std::cout << "vcount "<< vcount << std::endl;
+
+            throw  std::logic_error(" Incorrect procedure to find vertices");
+
+        }
 
         bool has_hang_nodes(false);
         if(vertices.size() != pts.size())
@@ -431,11 +588,14 @@ private:
 
         return std::make_pair(has_hang_nodes, vertices);
     }
+
     /*Set boundary number*/
+    #if 0
     template<typename EdgeType, typename Storage>
     size_t
     set_bnd_number(const EdgeType& edge, const Storage& storage)
     {
+
         T x0 = 0.5;
         auto pts_ids  = edge.point_ids();
         auto p1   = storage->points.at(pts_ids.at(0));
@@ -446,6 +606,7 @@ private:
         else
             return 2;
     }
+    #endif
     #if 0
     set_neighbors(mesh_type& msh, m_edges, std::vector<surface_type>& surfaces);
     {
@@ -476,9 +637,6 @@ public:
 
     bool populate_mesh(mesh_type& msh)
     {
-
-
-
         std::cout << " *** POPULATING FVCA5 MESH ***" << std::endl;
         auto storage = msh.backend_storage();
 
@@ -520,6 +678,7 @@ public:
         /* Detect which ones are boundary edges */
         storage->boundary_edges.resize(m_edges.size());
         storage->boundary_info.resize(m_edges.size());
+
         for (size_t i = 0; i < m_boundary_edges.size(); i++)
         {
             auto node1 = typename node_type::id_type(m_boundary_edges[i][0]);
@@ -538,8 +697,24 @@ public:
                 return false;
             }
 
-            auto bnd_number = set_bnd_number(edge, storage);
-            bnd_info bi{bnd_number, true};
+            size_t bnd_number = m_boundary_edges[i][2];//set_bnd_number(edge, storage);
+
+            boundary bndtype;
+            if(bnd_number == 1)
+            {
+                std::cout << "DIRICHLET" << std::endl;
+                bndtype = boundary::DIRICHLET;
+                std::cout << "bnd:  #"<< bnd_number << ";  type: "<< bndtype<< std::endl;
+            }
+            else
+            {
+                std::cout << "NEUMANN" << std::endl;
+                bndtype = boundary::NEUMANN;
+                std::cout << "bnd:  #"<< bnd_number << ";  type: "<< bndtype<< std::endl;
+            }
+
+            bnd_info bi(bnd_number, true, bndtype);
+
             storage->boundary_info.at(position.second)  = bi;
             storage->boundary_edges.at(position.second) = true;
         }
@@ -566,7 +741,10 @@ public:
                           m_dodecagons.size() +
                           m_triadecagons.size()  +
                           m_pentadecagons.size() +
-                          m_tesseradecagons.size())
+                          m_tesseradecagons.size() +
+                          m_16gons.size() + m_17gons.size() + m_18gons.size() + m_19gons.size() +
+                          m_20gons.size() + m_21gons.size() + m_21gons.size() + m_22gons.size() + m_23gons.size()
+                           + m_24gons.size() + m_25gons.size())
                           ;
 
         //std::cout << "/* message Put Polygons*/" << std::endl;
@@ -611,6 +789,28 @@ public:
         put_polygons(msh, m_pentadecagons, surfaces);
         m_pentadecagons.clear();
 
+        put_polygons(msh, m_16gons, surfaces);
+        m_16gons.clear();
+
+        put_polygons(msh, m_17gons, surfaces);
+        m_17gons.clear();
+        put_polygons(msh, m_18gons, surfaces);
+        m_18gons.clear();
+        put_polygons(msh, m_19gons, surfaces);
+        m_19gons.clear();
+        put_polygons(msh, m_20gons, surfaces);
+        m_20gons.clear();
+        put_polygons(msh, m_21gons, surfaces);
+        m_21gons.clear();
+        put_polygons(msh, m_22gons, surfaces);
+        m_22gons.clear();
+        put_polygons(msh, m_23gons, surfaces);
+        m_23gons.clear();
+        put_polygons(msh, m_24gons, surfaces);
+        m_24gons.clear();
+        put_polygons(msh, m_25gons, surfaces);
+        m_25gons.clear();
+
         index_transf(surfaces);
 
         std::sort(surfaces.begin(), surfaces.end());
@@ -636,10 +836,29 @@ public:
         /* Print stats */
         storage->statistics();
 
+        storage->edges_owners.resize(storage->edges.size());
+        storage->edges_owners = faces_owners(msh);
+
+        std::cout << "edges_owners" << std::endl;
+        size_t fccount = 0;
+        for(auto& pair : storage->edges_owners )
+        {
+            std::cout << " face ("<< fccount++<<") : "<<  pair.first <<  "  "<< pair.second  << std::endl;
+        }
         return true;
     }
 };
 
+template<typename MeshType>
+std::vector<std::pair<int,int>>
+faces_owners(const MeshType& msh)
+{
+    auto ret = std::vector<std::pair<int,int>>(msh.faces_size());
+    size_t cont= 0;
+    for(auto fitor = msh.faces_begin(); fitor != msh.faces_end(); fitor++)
+        ret.at(cont++) = face_owner_cells_ids(msh, *fitor);
+    return ret;
+}
 
 
 template<typename T, size_t N>

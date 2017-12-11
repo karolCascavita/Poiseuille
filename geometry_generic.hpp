@@ -86,32 +86,13 @@ faces(const generic_mesh<T, DIM>& msh, const typename generic_mesh<T, DIM>::cell
 }
 
 template<typename T, size_t DIM>
-std::vector<typename generic_mesh<T, DIM>::cell::id_type>
+std::pair<int,int>
 face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
-                        const typename generic_mesh<T, DIM>::face& fc)
+                    const typename generic_mesh<T, DIM>::face& fc)
 {
-    #if 0
-    std::vector<typename generic_mesh<T, DIM>::cell::id_type> ret;
-    /* Search the face in the other cells*/
-    for(auto& cl:msh)
-    {
-        auto fcs = faces(msh,cl);
-        std::sort(fcs.begin(), fcs.end());
-        if(std::binary_search(fcs.begin(),fcs.end(),fc))
-        {
-            auto cl_id = msh.lookup(cl);
-            //std::cout << "/* cell_id = "<< cl_id<<" */" << std::endl;
-            ret.push_back(cl_id);
-        }
-    }
-    if(ret.size() > 2)
-        throw std::logic_error("face have more than 2 owners");
-    // WK:This should be redefine as a pair, instead of a vector, so it will always have just 2 owners
-    // and I dont need to check the size
-    return ret;
-    #endif
+    std::pair<int,int> ret;
 
-    std::vector<typename generic_mesh<T, DIM>::cell::id_type> ret;
+    std::vector<typename generic_mesh<T, DIM>::cell::id_type> vec;
     for(auto& cl:msh)
     {
         auto fcs  = faces(msh,cl);
@@ -121,71 +102,40 @@ face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
         if (itor != fcs.end() && !(fc < *itor))
         {
             auto cl_id = cl.get_id();
-            ret.push_back(cl_id);
+            vec.push_back(cl_id);
         }
     }
-    if(ret.size() > 2)
+    if(vec.size() == 0)
+        throw std::logic_error(" No owners found for this face");
+    else if(vec.size() == 1)
+    {
+        if(msh.is_boundary(fc))
+        {
+            ret.first = vec[0];
+            ret.second = -1;
+            return ret;
+        }
+        else
+        {
+            std::cout << "face : "<< msh.lookup(fc) << std::endl;
+            throw std::logic_error("Just one owner found for a inner face.");
+        }
+    }
+    else if(vec.size() == 2)
+    {
+        if(msh.is_boundary(fc))
+            throw std::logic_error("Two owners found for a Boundary edge.");
+        else
+        {
+            ret.first  = vec[0];
+            ret.second = vec[1];;
+            return ret;
+        }
+    }
+    else
         throw std::logic_error(" Finding more than 2 cell for the face");
-    else if(ret.size() == 0)
-        throw std::logic_error(" No owners found for the face");
-    else
-        return ret;
+
 }
-
-
-template<typename T, size_t DIM>
-typename generic_mesh<T, DIM>::cell::id_type
-face_owner_cells_ids(const generic_mesh<T, DIM>& msh,
-                        const typename generic_mesh<T, DIM>::face& face,
-                        const typename generic_mesh<T, DIM>::cell& cell)
-{
-    #if 0
-    typedef typename generic_mesh<T, DIM>::cell::id_type cell_id_type;
-    cell_id_type ret;
-    /* Search the face in the other cells*/
-    auto cell_id = msh.lookup(cell);
-
-    for(auto& cl:msh)
-    {
-        auto fcs = faces(msh,cl);
-        std::sort(fcs.begin(), fcs.end());
-        if(std::binary_search(fcs.begin(),fcs.end(),fc))
-        {
-            cell_id_type cl_id = msh.lookup(cl);
-
-            std::cout << "  inside  cl_id "<< cl_id << std::endl;
-
-            if(!(cl_id == cell_id))
-            {
-                ret = cl_id;
-                std::cout << "  inside  ngh_id "<< cl_id << std::endl;
-                break;
-            }
-        }
-    }
-    #endif
-    if(msh.is_boundary(face))
-    {
-        throw std::logic_error("Do not call face_owner_cells_ids(msh, fc, cl) for boundaray edges; since it gives the neighbor of cl for this face.");
-    }
-    else
-    {
-        auto cell_id =cell.get_id();
-
-        for(auto& cl : msh)
-        {
-            auto fcs   = faces(msh,cl);
-            std::sort(fcs.begin(), fcs.end());
-            auto itor  = std::lower_bound(fcs.begin(), fcs.end(), face);
-            auto neighbor_id = cl.get_id();
-
-            if( itor != fcs.end() && !(face < *itor) && (neighbor_id != cell_id))
-                return neighbor_id;
-        }
-        throw std::logic_error(" Not neighbor found");
-    }
-}
-
 
 
 template<typename T, size_t DIM>
@@ -194,11 +144,12 @@ check_older_msh(const generic_mesh<T, DIM>& msh)
 {
     auto storage = msh.backend_storage();
     auto points  = storage ->points;
-
-    std::cout << "/ **************** POINTS        **************** /" << std::endl;
+    std::cout << "/ **************** POINTS (SZ"<< storage ->points.size();
+    std::cout <<")      **************** /" << std::endl;
     for(auto& p: points)
         std::cout << "      "<< p << std::endl;
-    std::cout << "/ **************** FACES:  cells **************** /" << std::endl;
+    std::cout << "/ **************** FACES (SZ "<<msh.faces_size();
+    std::cout << " ):  cells **************** /" << std::endl;
     //typename generic_mesh<T, DIM>::cell::id_type
     for(auto itor = msh.faces_begin(); itor != msh.faces_end(); itor++)
     {
@@ -230,7 +181,8 @@ check_older_msh(const generic_mesh<T, DIM>& msh)
             std::cout << "     "<< n;
         std::cout<< std::endl;
     }
-    std::cout << "/ **************** CELSS:  faces **************** /" << std::endl;
+    std::cout << "/ **************** CELLS:"<<msh.cells_size();
+    std::cout << " ):  faces **************** /" << std::endl;
 
     for(auto& cl : msh)
     {
@@ -247,7 +199,9 @@ check_older_msh(const generic_mesh<T, DIM>& msh)
 
     for(auto& cl : msh)
     {
-        std::cout << "cell : "<< msh.lookup(cl)<< "      ; nodes :";
+        auto id = msh.lookup(cl);
+        std::cout << "cell : "<< id << "      ; nodes :  ("<< storage->special_surfaces.at(id).first;
+        std::cout << ")" ;
         auto nodes  = cl.point_ids();
 
         for(auto& p : nodes)
@@ -268,6 +222,8 @@ measure(const generic_mesh<T,2>& msh, const typename generic_mesh<T,2>::cell& cl
 {
     auto pts = points(msh, cl);
 
+
+
     T acc{};
     for (size_t i = 1; i < pts.size() - 1; i++)
     {
@@ -277,6 +233,29 @@ measure(const generic_mesh<T,2>& msh, const typename generic_mesh<T,2>::cell& cl
         acc += n.norm() / T(2);
     }
 
+    auto vts_ids = msh.get_vertices_pos(cl);
+    std::vector<point<T,2>> vts(vts_ids.size());
+    size_t i = 0;
+    for(auto id: vts_ids)
+        vts.at(i++) = pts.at(id);
+
+    T acc_v{};
+    for (size_t i = 1; i < vts.size() - 1; i++)
+    {
+        auto u = (vts.at(i) - vts.at(0)).to_vector();
+        auto v = (vts.at(i+1) - vts.at(0)).to_vector();
+        auto n = cross(u, v);
+        acc_v += n.norm() / T(2);
+    }
+
+    if(std::abs(acc_v -acc)/acc > 1.e-4)
+    {
+        std::cout << "cell :"<< cl.get_id() << std::endl;
+        std::cout << "diff :"<< std::abs(acc_v -acc)<< std::endl;
+        std::cout << "area :"<< acc << std::endl;
+        std::cout << "area without hanging_nodes :"<< acc_v << std::endl;
+        throw std::logic_error("Areas are not the same, review get_vertices!!");
+    }
     return acc;
 }
 
@@ -322,6 +301,20 @@ diameter(const Mesh& msh, const Element& elem)
 
     return diam;
 }
+template<typename Mesh>
+typename Mesh::scalar_type
+diameter(const Mesh& msh, const std::vector<typename Mesh::point_type>& pts)
+{
+    typename Mesh::scalar_type diam = 0.;
+
+    for (size_t i = 0; i < pts.size(); i++)
+        for (size_t j = i+1; j < pts.size(); j++)
+            diam = std::max((pts[i] - pts[j]).to_vector().norm(), diam);
+
+    return diam;
+}
+
+#if 0
 /* Compute the barycenter of a 2-face */
 template<typename T>
 point<T,2>
@@ -333,6 +326,59 @@ barycenter(const generic_mesh<T,2>& msh, const typename generic_mesh<T,2>::face&
     return bar;
 }
 
+template<typename Mesh, typename Element>
+point<typename Mesh::coordinate_type, Mesh::dimension>
+barycenter(const Mesh& msh, const Element& elm)
+{
+    auto pts = points(msh, elm);
+    auto bar = std::accumulate(std::next(pts.begin()), pts.end(), pts.front());
+    return bar / typename Mesh::coordinate_type( pts.size() );
+}
+#endif
+
+template<typename Mesh, typename Element>
+point<typename Mesh::scalar_type, Mesh::dimension>
+barycenter(const Mesh& msh, const Element& elm)
+{
+    auto pts = points(msh, elm);
+    auto bar = std::accumulate(std::next(pts.begin()), pts.end(), pts.front());
+    return bar / typename Mesh::scalar_type( pts.size() );
+}
+template<typename MeshType, typename CellType, typename FaceType>
+size_t
+face_position(const MeshType& msh, const CellType& cell, const FaceType& face)
+{
+    //Esto deberia hacerse buscando con lower_bound o binary search
+    size_t   j = 0;
+    for(auto& fc : faces(msh, cell))
+    {
+        if(fc == face)
+            return j;
+        j++;
+    }
+    throw std::invalid_argument("This is a bug: face not found");
+};
+#if 0
+template<typename T>
+static_vector<T, 2>
+normal(const generic_mesh<T,2>& msh,
+       const typename generic_mesh<T,2>::cell& cl,
+       const typename generic_mesh<T,2>::face& fc)
+{
+    // Only if cell points are order in ccw
+    auto pos = face_position(msh, cl, fc);
+
+    auto cpts = points(msh, cl);
+    auto p1 = cpts.at(pos);
+    auto p2 = cpts.at((pos+1)%cpts.size());
+
+    auto v = p2 - p1;
+    auto n = (point<T,2>({-v.y(), v.x()})).to_vector();
+
+    return n/n.norm();
+}
+#endif
+//#if 0
 template<typename T>
 static_vector<T, 2>
 normal(const generic_mesh<T,2>& msh,
@@ -354,7 +400,7 @@ normal(const generic_mesh<T,2>& msh,
 
     return n/n.norm();
 }
-
+//#endif
 template<typename T>
 T
 normal(const generic_mesh<T,1>& msh,
@@ -373,6 +419,43 @@ normal(const generic_mesh<T,1>& msh,
     throw std::logic_error("shouldn't have arrived here");
 }
 
+template<typename T>
+T
+normal_factor(const generic_mesh<T,2>& msh,
+       const typename generic_mesh<T,2>::cell& cl,
+       const typename generic_mesh<T,2>::face& fc)
+{
+    auto pts = points(msh, fc);
+    assert(pts.size() == 2);
+
+
+    auto v = pts[1] - pts[0];
+    auto n = (point<T,2>({-v.y(), v.x()})).to_vector();
+    auto cell_bar = barycenter(msh, cl);
+    auto face_bar = barycenter(msh, fc);
+    auto outward_vector = (face_bar - cell_bar).to_vector();
+
+    //std::cout << "value dot product ("<< cl.get_id()<<"): "<<  n.dot(outward_vector) << std::endl;
+    //std::cout << " normal : "<< n/n.norm() <<std::endl;
+    if ( n.dot(outward_vector) < T(0) )
+        return -1.;
+
+    return 1.;
+}
+
+template<typename T>
+static_vector<T, 2>
+normal_face(const generic_mesh<T,2>& msh,
+       const typename generic_mesh<T,2>::face& fc)
+{
+    auto pts = points(msh, fc);
+    assert(pts.size() == 2);
+
+    auto v = pts[1] - pts[0];
+    auto n = (point<T,2>({-v.y(), v.x()})).to_vector();
+
+    return n/n.norm();
+}
 
 
 
